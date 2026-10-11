@@ -153,6 +153,20 @@ cd C:\w\1c\агент
 `mcp\code-index-mcp\daemon.toml` (`[[paths]] path`) и в настройках MCP Cline (URL
 `http://127.0.0.1:8011/mcp` не меняется).
 
+### Как перенести сам репозиторий
+
+Репозиторий инициализирован (`git init`, ветка `main`). Выгрузка `dump/`, логи,
+бинарники MCP и `.epf` в него не попадают — см. `.gitignore`. Два способа переноса:
+
+* **через remote** (GitHub/GitLab): `git remote add origin <url>` → `git push -u origin main`,
+  на новой машине `git clone <url>`;
+* **локально, без сети**: `git bundle create repo.bundle --all`, перенести файл и на новой
+  машине `git clone repo.bundle "<папка>"`.
+
+После клонирования порядок тот же: `scripts\install-mcp.ps1` →
+`install-vendor-skills.ps1` → `fix-encoding.ps1` → выгрузка в `dump\` →
+`setup-code-index.ps1` → `install-skills.ps1`.
+
 ---
 
 ## 6. Эксплуатация
