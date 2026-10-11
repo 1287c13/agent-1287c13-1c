@@ -1,0 +1,39 @@
+{
+  "mcpServers": {
+    "1c-code": {
+      "type": "streamableHttp",
+      "url": "http://127.0.0.1:8011/mcp",
+      "disabled": false,
+      "autoApprove": []
+    },
+    "1c-toolkit": {
+      "type": "streamableHttp",
+      "url": "http://localhost:6003/mcp",
+      "disabled": true,
+      "autoApprove": []
+    },
+    "1c-code-stdio": {
+      "command": "C:\\w\\1c\\агент\\mcp\\code-index-mcp\\bsl-indexer.exe",
+      "args": ["serve", "--path", "ar208=C:\\w\\1c\\агент\\dump"],
+      "env": { "CODE_INDEX_HOME": "C:\\w\\1c\\агент\\mcp\\code-index-mcp" },
+      "disabled": true,
+      "autoApprove": []
+    },
+    "1c-live": {
+      "command": "C:\\w\\1c\\агент\\mcp\\optional\\mcp-1c\\mcp-1c.exe",
+      "args": ["--base", "http://localhost/ar208/hs/mcp-1c"],
+      "env": {
+        "MCP_1C_USER": "",
+        "MCP_1C_PASSWORD": ""
+      },
+      "disabled": true,
+      "autoApprove": []
+    },
+    "1c-rsv": {
+      "command": "C:\\w\\1c\\агент\\mcp\\optional\\mcp-rsv-data\\rsvdata-bridge.exe",
+      "args": [],
+      "disabled": true,
+      "autoApprove": []
+    }
+  }
+}

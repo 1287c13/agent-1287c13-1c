@@ -1,0 +1,24 @@
+# --- машинно-специфичное: XML-выгрузка конфигурации (гигабайты) и её индекс ---
+dump/
+
+# --- служебное и временное ---
+logs/
+cache/
+.code-index/
+
+# --- тяжёлые артефакты (скачиваются или создаются заново) ---
+*.dt
+*.cf
+*.cfe
+*.epf
+*.log
+
+# --- бинарники и состояние MCP ---
+mcp/code-index-mcp/*.exe
+mcp/code-index-mcp/daemon.json
+mcp/code-index-mcp/daemon.pid
+mcp/optional/
+
+# --- окружение ---
+.venv/
+venv/
