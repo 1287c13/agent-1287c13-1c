@@ -29,3 +29,6 @@ venv/
 
 # --- IDE ---
 .idea/
+
+# Вендорские наборы скиллов: разворачиваются scripts\install-vendor-repos.ps1, в git не хранятся
+skills-vendor/

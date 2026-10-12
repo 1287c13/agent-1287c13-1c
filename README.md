@@ -102,7 +102,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-harness.ps1
 | `.cline/mcp/` | бинарники MCP-серверов (не в git, ставятся скриптом) |
 | `.v8-project.json` | базы и путь к платформе 1С |
 | `scripts/` | установка, запуск, диагностика, публикация OData (`publish-odata.ps1`) |
-| `skills-vendor/` | снимок вендорских репозиториев без `.git` (обновляется `install-vendor-repos.ps1`) |
+| `skills-vendor/` | вендорские репозитории: в git не хранятся, разворачиваются `install-vendor-repos.ps1` |
 | `SOURCES.md` | внешние источники и зафиксированные версии |
 | `docs/` | описание решения; `docs/legacy/` - документация первой версии |
 | `mcp/` | доки по MCP-серверам и пример конфигурации (в примере `<КОРЕНЬ>` заменяется на путь к харнессу) |

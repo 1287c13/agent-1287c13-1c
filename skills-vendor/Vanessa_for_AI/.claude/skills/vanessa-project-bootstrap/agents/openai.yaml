@@ -1,4 +1,0 @@
-interface:
-  display_name: "Vanessa Project Bootstrap"
-  short_description: "Согласование структуры проекта Vanessa"
-  default_prompt: "Используй $vanessa-project-bootstrap, чтобы исследовать проект Vanessa Automation, предложить минимальную структуру и дождаться моего согласования."

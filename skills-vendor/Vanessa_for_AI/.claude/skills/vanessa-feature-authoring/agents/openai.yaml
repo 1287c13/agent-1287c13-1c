@@ -1,4 +1,0 @@
-interface:
-  display_name: "Vanessa Feature Authoring"
-  short_description: "Создание и диагностика сценариев Vanessa"
-  default_prompt: "Используй $vanessa-feature-authoring, чтобы создать или проверить Turbo Gherkin-сценарий по записи Vanessa Automation или проверенному аналогу."
