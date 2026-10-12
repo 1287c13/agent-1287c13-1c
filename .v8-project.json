@@ -9,7 +9,7 @@
       "type": "file",
       "path": "C:\\Users\\art8k\\OneDrive\\Документы\\1C\\DemoARAutomation20",
       "v8path": "C:\\Program Files\\1cv8\\8.3.27.2130\\bin",
-      "user": "",
+      "user": "Администратор",
       "password": "",
       "aliases": [
         "demo",
@@ -24,6 +24,8 @@
       "name": "DemoSSL",
       "type": "file",
       "path": "C:\\Users\\art8k\\OneDrive\\Документы\\1C\\DemoSSL",
+      "user": "Администратор",
+      "password": "",
       "aliases": ["ssl", "бсп"]
     },
     {

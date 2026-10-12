@@ -228,6 +228,56 @@ alias = "main"
 
 Правки в базе, не отражённые в выгрузке, для агента невидимы: он ответит «по выгрузке на <дата>».
 
+### Шаг 10. Прогон Gherkin-сценариев: Vanessa Automation внешней обработкой
+
+Vanessa Automation (BDD для 1С) **не ставится в конфигурацию базы**: это внешняя обработка, которую платформа запускает ключом `/Execute`. В базе не появляется ни одного объекта метаданных - отдельного шага установки, как для MCP-серверов, здесь нет.
+
+| Что | Значение |
+|-----|----------|
+| Проект | [Pr-Mex/vanessa-automation](https://github.com/Pr-Mex/vanessa-automation) (BSD-3-Clause, текущий релиз 1.2.043.1) |
+| Поставка | релизный архив `vanessa-automation-single.<версия>.zip`, внутри один `vanessa-automation-single.epf` - в него уже упакована библиотека шагов |
+| Релизы | [github.com/Pr-Mex/vanessa-automation/releases](https://github.com/Pr-Mex/vanessa-automation/releases) |
+| Документация | [pr-mex.github.io/vanessa-automation/dev](https://pr-mex.github.io/vanessa-automation/dev/); полный список ключей `VAParams.json` - `docs/JsonParams/JsonParamsRU.md` (лежит в архиве с исходниками, ветка `develop`) |
+
+1. Развернуть обработку в `.vanessa\` (каталог в git не хранится, как и все `*.epf`):
+
+```powershell
+# взять самый свежий vanessa-automation-single*.zip из Загрузок
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-vanessa.ps1
+# или указать архив явно
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-vanessa.ps1 -Zip "$env:USERPROFILE\Downloads\vanessa-automation-single.1.2.043.1.zip" -Force
+```
+
+2. Прогнать сценарии:
+
+```powershell
+# весь каталог features
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\vanessa-run.ps1
+
+# один сценарий
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\vanessa-run.ps1 -Features .\features\Smoke\ДымовойТест_ОткрытиеСпискаНоменклатуры.feature
+
+# не запускать, только собрать VAParams.json и напечатать строку запуска
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\vanessa-run.ps1 -NoRun
+```
+
+Скрипт берёт базу и платформу из `.v8-project.json`, собирает `.vanessa\VAParams.json` и поднимает сеанс менеджера тестирования:
+
+```
+1cv8c.exe ENTERPRISE /F"<путь к базе>" /N"<пользователь>" /P"<пароль>" /Execute ".vanessa\vanessa-automation-single.epf" /C"StartFeaturePlayer;VAParams=.vanessa\VAParams.json" /TESTMANAGER
+```
+
+Строка запуска и имена ключей `VAParams` не выдуманы, а взяты из самого проекта Vanessa: `tools\onescript\run-behavior-check-session.os` (функция `ПолучитьСтрокуЗапускаСборки`) и примеры `tools\JSON\VBParams*.json`. Работают и устаревшие имена (`VBParams` вместо `VAParams`, `КлиентыТестирования` вместо `ДанныеКлиентовТестирования`), порядок ключей в `/C` не важен.
+
+Результаты прогона складываются в `.vanessa\`: `status.txt` (0 - сценарии прошли, 1 - есть упавшие), `va-log.txt` (лог по шагам; при падении шага - текст ошибки, выполняемый код и техданные), `junit\junit.xml` (машиночитаемый отчёт). Имя файла отчёта - именно `junit.xml` (проверено прогоном), а не `Steps.xml`, как иногда пишут в статьях. Без `-NoWait` скрипт ждёт закрытия сеанса (`-TimeoutSec`, по умолчанию 1800 с) - в этом харнессе команда оболочки живёт 30 с, поэтому длинные прогоны запускайте с `-NoWait` и смотрите статус отдельно.
+
+**Прогон проверен на этой машине** (12.10.2026, Vanessa 1.2.043.1, платформа 8.3.27.2130): сценарий `features\Smoke\ДымовойТест_ВыполнениеКодаНаСервере.feature` прогнан в базе `demo-ssl` - `status.txt` = `0`, в `junit\junit.xml` `failures="0" errors="0" tests="1"`. Сценарий намеренно не привязан к объектам метаданных, поэтому годится как дымовой для любой базы.
+
+**Два ограничения машины, о которые спотыкается первый запуск.**
+
+- **Лицензия.** Vanessa поднимает в базе два клиентских сеанса: менеджер тестирования и клиент тестирования. Платформа без клиентской лицензии нужного уровня отвечает на второй клиент той же базы: `Превышено ограничение лицензии для разработчиков на количество клиентов информационной базы`. Перед прогоном базу надо освободить - закрыть все её клиентские сеансы, включая встроенный сервер `1C MCP Toolkit` (он тоже клиент базы). Прогон идёт в обычном окне 1С: нужен интерактивный рабочий стол, не RDP-сессия без графики.
+- **Учётные данные.** Если в базе есть пользователи, логин и пароль берутся из полей `user`/`password` записи базы в `.v8-project.json` (и подставляются и в сеанс менеджера, и в клиент тестирования). Без них платформа отвечает `Пользователь ИБ не идентифицирован`.
+
 ---
 
 ## 3. Ежедневный запуск
@@ -276,7 +326,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-harness.ps1
 
 Признаки исправного харнесса: ответ начинается преамбулой `Слой / MCP / Скиллы / Проверка` с названными MCP-инструментами и заканчивается блоком `Сделано / Проверка / Не проверено`. Если агент отвечает без преамбулы - он не видит правила: вернитесь к шагу 0 (рабочая папка) и шагу 8 (диагностика).
 
-Чего не стоит брать в первую задачу: запись в базу через `1c-toolkit` (при защите обработки любой код со словом `Записать` отклоняется), прогон Vanessa (нужна установленная в базу Vanessa Automation), задачи по 1С 7.7, Docker-валидацию, npm/JVM-инструменты - этого в харнессе нет (см. «чего харнесс не умеет» в [docs/06-troubleshooting.md](docs/06-troubleshooting.md)).
+Чего не стоит брать в первую задачу: запись в базу через `1c-toolkit` (при защите обработки любой код со словом `Записать` отклоняется), прогон Vanessa (Vanessa Automation ставится внешней обработкой и в конфигурацию базы не входит, но прогон требует освободить базу от других клиентских сеансов - см. шаг 10), задачи по 1С 7.7, Docker-валидацию, npm/JVM-инструменты - этого в харнессе нет (см. «чего харнесс не умеет» в [docs/06-troubleshooting.md](docs/06-troubleshooting.md)).
 
 Примеры задач:
 
@@ -300,7 +350,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-harness.ps1
 | `.cline/mcp/` | бинарники MCP-серверов, по папке на сервер: `1c-mcp-toolkit`, `code-index-mcp`, `bsl-platform-help-context` (третья появляется после сборки venv). Не в git, ставится `install-mcp.ps1` |
 | `.cline/mcp/code-index-mcp/home/daemon.toml` | какие каталоги индексирует `1c-code-index` (создаёт `enable-mcp.ps1`) |
 | `.v8-project.json` | базы 1С и путь к платформе |
-| `scripts/` | установка, запуск, диагностика, публикация OData (`publish-odata.ps1`) |
+| `.vanessa/` | внешняя обработка Vanessa Automation, собранный `VAParams.json` и результаты прогонов; в git не хранится (шаг 10) |
+| `scripts/` | установка, запуск, диагностика, публикация OData (`publish-odata.ps1`), Vanessa Automation (`install-vanessa.ps1`, `vanessa-run.ps1`) |
 | `skills-vendor/` | вендорские репозитории: в git не хранятся, разворачиваются `install-vendor-repos.ps1` (каталог без `.git` - с ключом `-Force`) |
 | `SOURCES.md` | внешние источники и зафиксированные версии |
 | `docs/` | описание решения; `docs/legacy/` - документация первой версии, для установки не годится (скриптов, на которые она ссылается, в репозитории больше нет) |
@@ -329,7 +380,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-harness.ps1
 - **сервер справки молчит** - в `v8path` нет файла `shcntx_ru.hbk` (в 8.3.25 его нет; используйте 8.3.27);
 - **`execute_code` отвергает код** («код содержит опасные ключевые слова») - включена защита записи в `MCP_Toolkit.epf`, снимается флагом в форме обработки;
 - **OData-публикация открывается, а `$metadata` даёт 404** - стандартный интерфейс OData в базе не настроен (пустая константа БСП), публикует `scripts\publish-odata.ps1`;
-- **сценарий Vanessa написан, но не прогоняется** - в базе нет Vanessa Automation, установка - задача `vanessa-project-bootstrap`.
+- **сценарий Vanessa написан, но не прогоняется** - либо не развёрнута внешняя обработка (`scripts\install-vanessa.ps1`), либо платформа не пускает в базу второй клиентский сеанс: закройте сеанс `1C MCP Toolkit` и остальные клиенты базы, прогону нужны два (шаг 10).
 
 ---
 
