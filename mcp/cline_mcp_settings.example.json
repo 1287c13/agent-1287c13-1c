@@ -1,39 +1,44 @@
 {
   "mcpServers": {
-    "1c-code": {
-      "type": "streamableHttp",
-      "url": "http://127.0.0.1:8011/mcp",
+    "1c-platform-help": {
+      "command": "<КОРЕНЬ>\\.cline\\mcp\\bsl-platform-help-context\\.venv\\Scripts\\mcp-bsl-context.exe",
+      "args": ["-p", "C:\\Program Files\\1cv8\\8.3.27.2130\\bin", "-m", "stdio"],
       "disabled": false,
-      "autoApprove": []
+      "autoApprove": [
+        "search",
+        "info",
+        "get_member",
+        "get_members",
+        "get_constructors",
+        "get_platform_info",
+        "get_coding_guideline",
+        "get_strict_typing_info",
+        "search_strict_typing"
+      ],
+      "timeout": 120,
+      "type": "stdio"
+    },
+    "1c-code-index": {
+      "command": "<КОРЕНЬ>\\.cline\\mcp\\code-index-mcp\\bsl-indexer.exe",
+      "args": [
+        "serve",
+        "--config",
+        "<КОРЕНЬ>\\.cline\\mcp\\code-index-mcp\\home\\daemon.toml"
+      ],
+      "env": {
+        "CODE_INDEX_HOME": "<КОРЕНЬ>\\.cline\\mcp\\code-index-mcp\\home"
+      },
+      "disabled": false,
+      "autoApprove": ["get_stats", "health", "read_file", "list_files", "stat_file"],
+      "timeout": 120,
+      "type": "stdio"
     },
     "1c-toolkit": {
       "type": "streamableHttp",
-      "url": "http://localhost:6003/mcp",
-      "disabled": true,
-      "autoApprove": []
-    },
-    "1c-code-stdio": {
-      "command": "C:\\w\\1c\\агент\\mcp\\code-index-mcp\\bsl-indexer.exe",
-      "args": ["serve", "--path", "ar208=C:\\w\\1c\\агент\\dump"],
-      "env": { "CODE_INDEX_HOME": "C:\\w\\1c\\агент\\mcp\\code-index-mcp" },
-      "disabled": true,
-      "autoApprove": []
-    },
-    "1c-live": {
-      "command": "C:\\w\\1c\\агент\\mcp\\optional\\mcp-1c\\mcp-1c.exe",
-      "args": ["--base", "http://localhost/ar208/hs/mcp-1c"],
-      "env": {
-        "MCP_1C_USER": "",
-        "MCP_1C_PASSWORD": ""
-      },
-      "disabled": true,
-      "autoApprove": []
-    },
-    "1c-rsv": {
-      "command": "C:\\w\\1c\\агент\\mcp\\optional\\mcp-rsv-data\\rsvdata-bridge.exe",
-      "args": [],
-      "disabled": true,
-      "autoApprove": []
+      "url": "http://127.0.0.1:6003/mcp",
+      "disabled": false,
+      "autoApprove": [],
+      "timeout": 120
     }
   }
 }

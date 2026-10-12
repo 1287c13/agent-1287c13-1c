@@ -1,0 +1,44 @@
+{
+  "v8path": "C:\\Program Files\\1cv8\\8.3.27.2130\\bin",
+  "v8args": [],
+  "default": "demo-ar",
+  "databases": [
+    {
+      "id": "demo-ar",
+      "name": "DemoARAutomation20",
+      "type": "file",
+      "path": "C:\\Users\\art8k\\OneDrive\\Документы\\1C\\DemoARAutomation20",
+      "v8path": "C:\\Program Files\\1cv8\\8.3.27.2130\\bin",
+      "user": "",
+      "password": "",
+      "aliases": [
+        "demo",
+        "демо",
+        "DemoAR",
+        "DemoARAutomation20",
+        "автоматизация"
+      ]
+    },
+    {
+      "id": "demo-ssl",
+      "name": "DemoSSL",
+      "type": "file",
+      "path": "C:\\Users\\art8k\\OneDrive\\Документы\\1C\\DemoSSL",
+      "aliases": ["ssl", "бсп"]
+    },
+    {
+      "id": "demo-erp",
+      "name": "DemoERPUH",
+      "type": "file",
+      "path": "C:\\Users\\art8k\\OneDrive\\Документы\\1C\\DemoERPUH",
+      "aliases": ["erp", "ерп"]
+    },
+    {
+      "id": "demo-trd",
+      "name": "DemoTrd",
+      "type": "file",
+      "path": "C:\\Users\\art8k\\OneDrive\\Документы\\1C\\DemoTrd",
+      "aliases": ["trd", "упп"]
+    }
+  ]
+}

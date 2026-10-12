@@ -1,74 +1,117 @@
-﻿<#
+﻿#Requires -Version 5.1
+<#
 .SYNOPSIS
-    Скачать MCP-серверы в .\mcp (code-index-mcp, 1c-mcp-toolkit и опциональные).
-.EXAMPLE
-    .\install-mcp.ps1
-    .\install-mcp.ps1 -Optional        # дополнительно mcp-1c и mcp-rsv-data
+  Ставит MCP-серверы харнесса внутрь каталога проекта (.cline\mcp).
+
+.DESCRIPTION
+  Ставятся три сервера, каждый - в свой подкаталог .cline\mcp\:
+    1c-code-index     bsl-indexer.exe            (структурный поиск по коду, сборка с поддержкой 1С)
+    1c-toolkit        MCP_Toolkit.epf            (живая база 1С: данные, код, метаданные, OData)
+    1c-platform-help  mcp-bsl-context (venv)     (справка API платформы 1С, стандарты BSL)
+
+  Бинарники в git не хранятся (крупные). В git лежат конфиг, скрипты и скиллы;
+  этот скрипт восстанавливает бинарную часть на любой машине.
+
+.NOTES
+  Требует: git, python-лаунчер (py), интернет. Идемпотентен; -Force переустанавливает.
 #>
 [CmdletBinding()]
 param(
-    [switch]$Optional,
-    [string]$Root
+    [string] $Root,
+    # Версия релиза code-index-mcp ("latest" или, например, "v1.8.6").
+    [string] $CodeIndexRelease = 'latest',
+    # Лаунчер Python для venv сервера справки.
+    [string] $PythonLauncher = 'py -3',
+    [switch] $Force
 )
+
 $ErrorActionPreference = 'Stop'
-if (-not $Root) { $Root = Split-Path -Parent $PSScriptRoot }
-$ProgressPreference = 'SilentlyContinue'
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 
-function Get-LatestAssetUrl([string]$repo, [string]$namePattern) {
-    $rel = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest" -Headers @{ 'User-Agent' = 'cline-1c-agent' }
-    $asset = $rel.assets | Where-Object { $_.name -match $namePattern } | Select-Object -First 1
-    if (-not $asset) { throw "В релизе $repo нет актива по маске '$namePattern'" }
-    return $asset.browser_download_url
+if ([string]::IsNullOrWhiteSpace($Root)) {
+    $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent (Resolve-Path $PSCommandPath).Path }
+    $Root = Split-Path -Parent $scriptDir
 }
 
-function Get-File([string]$url, [string]$out) {
-    Write-Host "  -> $url"
-    Invoke-WebRequest $url -OutFile $out -UseBasicParsing
-    Write-Host "     saved: $out"
+$mcpDir   = Join-Path $Root '.cline\mcp'
+$vendor   = Join-Path $Root 'skills-vendor'
+New-Item -ItemType Directory -Force $mcpDir | Out-Null
+
+$userAgent = @{ 'User-Agent' = '1c-ai-agent-harness' }
+
+# ============================================================================
+# 1. code-index-mcp (bsl-indexer.exe)
+# ============================================================================
+$ciDir = Join-Path $mcpDir 'code-index-mcp'
+$ciExe = Join-Path $ciDir 'bsl-indexer.exe'
+New-Item -ItemType Directory -Force $ciDir | Out-Null
+
+if ((Test-Path $ciExe) -and -not $Force) {
+    Write-Host "[=] 1c-code-index: bsl-indexer.exe уже установлен"
+}
+else {
+    $metaUrl = if ($CodeIndexRelease -eq 'latest') {
+        'https://api.github.com/repos/Regsorm/code-index-mcp/releases/latest'
+    } else {
+        "https://api.github.com/repos/Regsorm/code-index-mcp/releases/tags/$CodeIndexRelease"
+    }
+    Write-Host "[*] 1c-code-index: $metaUrl"
+    $rel = Invoke-RestMethod $metaUrl -Headers $userAgent -TimeoutSec 60
+    $asset = $rel.assets | Where-Object { $_.name -eq 'bsl-indexer-windows-x64.zip' } | Select-Object -First 1
+    if (-not $asset) { throw 'В релизе нет актива bsl-indexer-windows-x64.zip' }
+    $zip = Join-Path $env:TEMP 'bsl-indexer-windows-x64.zip'
+    Invoke-WebRequest $asset.browser_download_url -OutFile $zip -UseBasicParsing -Headers $userAgent
+    ($rel.tag_name) | Set-Content (Join-Path $ciDir 'VERSION.txt') -Encoding UTF8
+    Remove-Item $ciExe -Force -ErrorAction SilentlyContinue
+    Expand-Archive -Path $zip -DestinationPath $ciDir -Force
+    Write-Host "[+] 1c-code-index: $($rel.tag_name) -> $ciExe"
 }
 
-# --- 1. code-index-mcp (bsl-indexer) : слой кода и метаданных ---
-$dst = Join-Path $Root 'mcp\code-index-mcp'
-New-Item -ItemType Directory -Force $dst | Out-Null
-try {
-    $url = Get-LatestAssetUrl 'Regsorm/code-index-mcp' 'bsl-indexer-windows-x64\.zip'
-    $zip = Join-Path $env:TEMP 'bsl-indexer.zip'
-    Get-File $url $zip
-    Expand-Archive $zip -DestinationPath $dst -Force
-    Write-Host "code-index-mcp установлен в $dst"
-} catch { Write-Warning "code-index-mcp: $($_.Exception.Message)" }
+# ============================================================================
+# 2. 1c-mcp-toolkit (MCP_Toolkit.epf) — берём из вендорского репозитория
+# ============================================================================
+$tkDir = Join-Path $mcpDir '1c-mcp-toolkit'
+New-Item -ItemType Directory -Force $tkDir | Out-Null
+$tkSrc = Join-Path $vendor '1c-mcp-toolkit\build\MCP_Toolkit.epf'
 
-# --- 2. 1c-mcp-toolkit : слой живой базы (встроенный HTTP-сервер в .epf) ---
-$dst2 = Join-Path $Root 'mcp\1c-mcp-toolkit'
-New-Item -ItemType Directory -Force $dst2 | Out-Null
-try {
-    $url = Get-LatestAssetUrl 'ROCTUP/1c-mcp-toolkit' '\.epf$'
-    Get-File $url (Join-Path $dst2 'MCP_Toolkit.epf')
-} catch {
-    try {
-        Get-File 'https://raw.githubusercontent.com/ROCTUP/1c-mcp-toolkit/main/build/MCP_Toolkit.epf' (Join-Path $dst2 'MCP_Toolkit.epf')
-    } catch { Write-Warning "1c-mcp-toolkit: $($_.Exception.Message)" }
+if ((Test-Path (Join-Path $tkDir 'MCP_Toolkit.epf')) -and -not $Force) {
+    Write-Host '[=] 1c-toolkit: MCP_Toolkit.epf уже установлен'
+}
+elseif (Test-Path $tkSrc) {
+    Copy-Item $tkSrc $tkDir -Force
+    Copy-Item (Join-Path $vendor '1c-mcp-toolkit\build\MCP_Toolkit_x86.epf') $tkDir -Force -ErrorAction SilentlyContinue
+    Write-Host "[+] 1c-toolkit: MCP_Toolkit.epf скопирован из skills-vendor"
+}
+else {
+    throw "Нет $tkSrc. Сначала выполните scripts\install-vendor-repos.ps1"
 }
 
-if ($Optional) {
-    # --- 3. mcp-1c : live-метаданные и SELECT-запросы при публикации базы ---
-    $dst3 = Join-Path $Root 'mcp\optional\mcp-1c'
-    New-Item -ItemType Directory -Force $dst3 | Out-Null
-    try {
-        $url = Get-LatestAssetUrl 'feenlace/mcp-1c' 'windows.*amd64.*\.zip|mcp-1c.*windows.*\.exe'
-        if ($url -match '\.zip$') { Get-File $url (Join-Path $env:TEMP 'mcp1c.zip'); Expand-Archive (Join-Path $env:TEMP 'mcp1c.zip') -DestinationPath $dst3 -Force }
-        else { Get-File $url (Join-Path $dst3 'mcp-1c.exe') }
-    } catch { Write-Warning "mcp-1c: $($_.Exception.Message)" }
+# ============================================================================
+# 3. bsl-platform-help-context (venv)
+# ============================================================================
+$phDir = Join-Path $mcpDir 'bsl-platform-help-context'
+$phSrc = Join-Path $vendor 'mcp-bsl-platform-help-context'
+$phPy  = Join-Path $phDir '.venv\Scripts\python.exe'
+New-Item -ItemType Directory -Force $phDir | Out-Null
 
-    # --- 4. mcp-rsv-data : read-only данные по COM для аналитика ---
-    $dst4 = Join-Path $Root 'mcp\optional\mcp-rsv-data'
-    New-Item -ItemType Directory -Force $dst4 | Out-Null
-    try {
-        Get-File 'https://github.com/prepod2003/mcp-rsv-data/releases/latest/download/MCP-RSV-Data.zip' (Join-Path $env:TEMP 'rsv.zip')
-        Expand-Archive (Join-Path $env:TEMP 'rsv.zip') -DestinationPath $dst4 -Force
-    } catch { Write-Warning "mcp-rsv-data: $($_.Exception.Message)" }
+if (-not (Test-Path $phSrc)) {
+    Write-Warning "Нет исходников $phSrc - запускаю install-vendor-repos.ps1"
+    & (Join-Path $PSScriptRoot 'install-vendor-repos.ps1') -Root $Root
+}
+
+$installed = (Test-Path (Join-Path $phDir '.venv\Scripts\mcp-bsl-context.exe'))
+if ($installed -and -not $Force) {
+    Write-Host '[=] 1c-platform-help: venv уже собран'
+}
+else {
+    Write-Host "[*] 1c-platform-help: создаю venv ($PythonLauncher) - это несколько минут"
+    if (Test-Path (Join-Path $phDir '.venv')) { Remove-Item (Join-Path $phDir '.venv') -Recurse -Force }
+    $pyParts = $PythonLauncher -split '\s+'
+    & $pyParts[0] @($pyParts[1..($pyParts.Count - 1)] + @('-m', 'venv', (Join-Path $phDir '.venv')))
+    & $phPy -m pip install --upgrade pip --disable-pip-version-check --quiet
+    & $phPy -m pip install --disable-pip-version-check $phSrc
+    Write-Host '[+] 1c-platform-help: venv собран'
 }
 
 Write-Host ''
-Write-Host 'Проверьте содержимое:' $dst ' ' $dst2
+Write-Host 'Готово. Дальше: scripts\enable-mcp.ps1 (подключить серверы к Cline).'

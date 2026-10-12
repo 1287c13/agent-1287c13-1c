@@ -22,3 +22,10 @@ mcp/optional/
 # --- окружение ---
 .venv/
 venv/
+
+# --- рантайм харнесса: ставится скриптами из scripts\, в git не хранится ---
+.cline/mcp/
+.cline/skills/
+
+# --- IDE ---
+.idea/
