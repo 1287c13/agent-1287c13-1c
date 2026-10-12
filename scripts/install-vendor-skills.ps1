@@ -40,7 +40,7 @@ $sources = @(
     @{ Repo = 'va-ai-autotests';              Path = 'skill' },            # генератор Gherkin-сценариев
     @{ Repo = '1c-mcp-toolkit';               Path = 'skills' },           # навыки работы с 1C MCP Toolkit
     @{ Repo = 'product-analyst';              Path = '.' },                # SKILL.md в корне репозитория
-    @{ Repo = 'cursor-1c-skills';             Path = 'skills' }            # 121 скилл, имена с префиксом 1c-*; ВЫИГРЫВАЕТ конфликты
+    @{ Repo = 'cursor-1c-skills';             Path = 'skills' }            # 120 скиллов, имена с префиксом 1c-*; ВЫИГРЫВАЕТ конфликты
 )
 
 if (-not (Test-Path $vendorDir)) {

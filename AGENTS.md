@@ -4,7 +4,8 @@
 Точка входа для пользователя: **`START.md`**. Развёрнутая версия правил:
 `.clinerules/00-contract.md`, `.clinerules/10-mcp-and-skills.md`,
 `.clinerules/20-1c-platform.md`, `.clinerules/30-verification.md`,
-`.clinerules/40-lessons.md` (грабли и уроки — дописывается по ходу работы).
+`.clinerules/40-lessons.md` (грабли и уроки — дописывается по ходу работы),
+`.clinerules/50-harness.md` (задачи по самому харнессу, без базы).
 
 ## Формат задачи
 

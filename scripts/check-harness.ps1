@@ -10,7 +10,11 @@
     - фон индексатора кода и доступность его MCP-сервера;
     - порт 6003 встроенного сервера 1C MCP Toolkit;
     - .v8-project.json и существование баз из него;
-    - платформы 1С и наличие файлов справки shcntx_ru.hbk.
+    - платформы 1С и наличие файлов справки shcntx_ru.hbk;
+    - прогон Gherkin/Vanessa: обработка, сценарии, VAParams;
+    - учётные данные баз (user/password) для подключения и прогона;
+    - занятость клиентских сеансов 1С (лицензия на клиентов);
+    - развёрнутость вендорских репозиториев (skills-vendor).
 
 .NOTES
   Ничего не меняет. Код возврата 0 - всё в порядке, 1 - есть замечания.
@@ -33,6 +37,7 @@ $script:problems = 0
 function Ok   ($m) { Write-Host "  [ok]   $m" -ForegroundColor Green }
 function Bad  ($m) { Write-Host "  [FAIL] $m" -ForegroundColor Red;    $script:problems++ }
 function Warn ($m) { Write-Host "  [warn] $m" -ForegroundColor Yellow }
+function Info ($m) { Write-Host "  [info] $m" -ForegroundColor DarkGray }
 function Head ($m) { Write-Host ''; Write-Host "== $m" -ForegroundColor Cyan }
 
 Write-Host "Харнесс: $Root"
@@ -115,6 +120,61 @@ if (Test-Path $skillsDir) {
     if ($n -gt 0) { Ok "$n скиллов с SKILL.md" } else { Bad 'скиллы не собраны - выполните scripts\install-vendor-skills.ps1' }
 }
 else { Bad 'нет каталога .cline\skills - выполните scripts\install-vendor-skills.ps1' }
+
+# --- 7. Прогон Gherkin/Vanessa ----------------------------------------------
+Head 'Прогон Gherkin/Vanessa'
+$epf = Join-Path $Root '.vanessa\vanessa-automation-single.epf'
+if (Test-Path $epf) { Ok 'внешняя обработка развёрнута (.vanessa\vanessa-automation-single.epf)' }
+else { Warn 'нет .vanessa\vanessa-automation-single.epf - выполните scripts\install-vanessa.ps1' }
+$featuresDir = Join-Path $Root 'features'
+if (Test-Path $featuresDir) {
+    $fCount = @(Get-ChildItem $featuresDir -Recurse -Filter *.feature -File -ErrorAction SilentlyContinue).Count
+    if ($fCount -gt 0) { Ok "$fCount сценариев .feature в features\" }
+    else { Warn 'каталог features\ есть, но .feature в нём нет' }
+}
+else { Warn 'нет каталога features\ - сюда кладутся сценарии для scripts\vanessa-run.ps1' }
+if (Test-Path (Join-Path $Root '.vanessa\VAParams.json')) { Ok 'VAParams.json собран (остался от прошлого прогона)' }
+else { Info 'VAParams.json ещё не собран - его готовит scripts\vanessa-run.ps1 перед прогоном' }
+
+# --- 8. Учётные данные баз ---------------------------------------------------
+Head 'Учётные данные баз (для подключения и прогона)'
+if (Test-Path $v8proj) {
+    $cfgU = Get-Content $v8proj -Raw -Encoding UTF8 | ConvertFrom-Json
+    foreach ($db in $cfgU.databases) {
+        $hasUser = -not [string]::IsNullOrWhiteSpace($db.user)
+        $hasPass = $db.PSObject.Properties.Name -contains 'password'
+        if (-not $hasUser) {
+            Warn "база $($db.id): нет поля user - без /N платформа ответит 'Пользователь ИБ не идентифицирован'"
+        }
+        elseif ($hasPass) {
+            Ok "база $($db.id): user='$($db.user)', поле password задано (пустое - нормально)"
+        }
+        else {
+            Warn "база $($db.id): user='$($db.user)', поля password нет - добавьте его, даже пустым"
+        }
+    }
+}
+else { Warn '.v8-project.json не найден - проверка учётных данных баз пропущена' }
+
+# --- 9. Клиентские сеансы 1С -------------------------------------------------
+Head 'Клиентские сеансы 1С (лицензия на клиентов)'
+$procs = @(Get-Process -Name '1cv8', '1cv8c', '1cv8s' -ErrorAction SilentlyContinue)
+if ($procs.Count -eq 0) { Ok 'процессов 1С не запущено - базы свободны для прогона' }
+else { Warn "процессов 1С: $($procs.Count) - прогону Vanessa нужны ДВА клиента одной базы; закройте чужие сеансы, включая 1C MCP Toolkit (порт 6003)" }
+
+# --- 10. Вендорские репозитории ---------------------------------------------
+Head 'Вендорские репозитории (skills-vendor)'
+$vendorDir = Join-Path $Root 'skills-vendor'
+$vendorRepos = @('cc-1c-skills', 'cursor-1c-skills', 'mcp-bsl-platform-help-context', 'Vanessa_for_AI', 'va-ai-autotests', 'product-analyst', '1c-mcp-toolkit')
+if (Test-Path $vendorDir) {
+    foreach ($v in $vendorRepos) {
+        $vp = Join-Path $vendorDir $v
+        if (-not (Test-Path $vp)) { Warn "$v - каталога нет (разверните scripts\install-vendor-repos.ps1)" }
+        elseif (Test-Path (Join-Path $vp '.git')) { Ok "$v развёрнут (ревизию сверяет scripts\check-docs.ps1)" }
+        else { Warn "$v - каталог без .git: ревизию сверить нельзя, обновить скриптом тоже" }
+    }
+}
+else { Bad 'нет каталога skills-vendor - выполните scripts\install-vendor-repos.ps1' }
 
 Head 'Итог'
 if ($script:problems -eq 0) { Write-Host 'Проблем не найдено.' -ForegroundColor Green; exit 0 }

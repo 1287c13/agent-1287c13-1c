@@ -294,16 +294,26 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-harness.ps1
 
 ## 4. Как ставить задачу
 
-Единственный формат:
+Два формата. Основной - задача по базе 1С:
 
 ```
 как <роль> сделай <действие> в базе <база> чтобы <цель> по START.md
 ```
 
-- `<роль>` - на каком слое работать: `программист 1С` (индекс кода и скиллы сборки), `аналитик` (живая база и индекс), `тестировщик` (Gherkin/Vanessa и живая база), `администратор` (скиллы `db-*`, `web-*`);
+- `<роль>` - на каком слое работать: `программист 1С` (индекс кода и скиллы сборки), `аналитик` (живая база и индекс), `тестировщик` (Gherkin/Vanessa и живая база), `администратор` (скиллы `db-*`, `web-*`). Роль задаёт приоритетный слой, а не набор скиллов: Cline держит активными все правила и выбирает скиллы по релевантности задачи;
 - `<база>` - алиас, `id` или `name` записи из `.v8-project.json`, либо путь к базе целиком;
 - `<цель>` - зачем; она же критерий проверки;
 - `по START.md` - маркер протокола, обязателен: без него агент не обязан читать `START.md`.
+
+Второй формат - задача по самому харнессу, без базы:
+
+```
+как инженер харнесса сделай <действие> чтобы <цель> по START.md
+```
+
+Так ставятся задачи про инструмент агента: правила `.clinerules/`, доки `docs/`, скрипты
+`scripts/`, формат задачи. Границы - `.clinerules/50-harness.md`; проверка таких задач -
+`check-harness.ps1` и `check-docs.ps1`.
 
 ### Базы этого харнесса
 
@@ -344,14 +354,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-harness.ps1
 |------|---------|
 | `START.md` | протокол работы агента (читается всегда) |
 | `AGENTS.md` | краткая выжимка контракта |
-| `.clinerules/` | постоянные правила Cline (контракт, MCP и скиллы, специфика 1С, проверка, грабли и уроки) |
+| `.clinerules/` | постоянные правила Cline (контракт, MCP и скиллы, специфика 1С, проверка, грабли и уроки, работа по харнессу) |
 | `.cline/skills/` | 206 скиллов из шести вендорских наборов (собираются из `skills-vendor/`) |
 | `.cline/cline_mcp_settings.json` | конфигурация MCP-серверов (в git; пути абсолютные - см. шаг 1) |
 | `.cline/mcp/` | бинарники MCP-серверов, по папке на сервер: `1c-mcp-toolkit`, `code-index-mcp`, `bsl-platform-help-context` (третья появляется после сборки venv). Не в git, ставится `install-mcp.ps1` |
 | `.cline/mcp/code-index-mcp/home/daemon.toml` | какие каталоги индексирует `1c-code-index` (создаёт `enable-mcp.ps1`) |
 | `.v8-project.json` | базы 1С и путь к платформе |
 | `.vanessa/` | внешняя обработка Vanessa Automation, собранный `VAParams.json` и результаты прогонов; в git не хранится (шаг 10) |
-| `scripts/` | установка, запуск, диагностика, публикация OData (`publish-odata.ps1`), Vanessa Automation (`install-vanessa.ps1`, `vanessa-run.ps1`) |
+| `scripts/` | установка, запуск, диагностика (`check-harness.ps1`, `check-docs.ps1`), публикация OData (`publish-odata.ps1`), Vanessa Automation (`install-vanessa.ps1`, `vanessa-run.ps1`) |
 | `skills-vendor/` | вендорские репозитории: в git не хранятся, разворачиваются `install-vendor-repos.ps1` (каталог без `.git` - с ключом `-Force`) |
 | `SOURCES.md` | внешние источники и зафиксированные версии |
 | `docs/` | описание решения; `docs/legacy/` - документация первой версии, для установки не годится (скриптов, на которые она ссылается, в репозитории больше нет) |
@@ -365,9 +375,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-harness.ps1
 # полная проверка харнесса: что установлено, что запущено, чего не хватает
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-harness.ps1
 
+# не разошлись ли доки и правила с фактом: числа скиллов, имена файлов, имена MCP-инструментов
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-docs.ps1
+
 # посмотреть, куда указывает переменная Cline
 [Environment]::GetEnvironmentVariable('CLINE_MCP_SETTINGS_PATH', 'User')
 ```
+
+Оба скрипта ничего не меняют: первый отвечает на вопрос «жив ли харнесс», второй - «не
+разъехались ли доки с содержимым каталога». Расхождения, найденные вторым, правятся
+отдельной задачей: `как инженер харнесса ... по START.md`.
 
 Частые случаи - [docs/06-troubleshooting.md](docs/06-troubleshooting.md).
 

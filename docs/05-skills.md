@@ -8,7 +8,7 @@
 задаче. Дополнительные файлы внутри каталога (`references/`, `scripts/`,
 `*.json`) скилл читает сам по своим инструкциям.
 
-Каталог: `.cline\skills\`. Количество: **207**.
+Каталог: `.cline\skills\`. Количество: **206**.
 
 ## Источники (шесть вендорских наборов)
 
@@ -97,7 +97,7 @@ Gherkin-тест и запусти его в базе» закрываются �
 | `code-review-checklist.mdc` | ревью |
 | `1c-cyrillic-windows.mdc` | кириллица в путях, запуск платформы |
 | `testing-patterns.mdc` | автотесты |
-| `transactions-and-locks.mdc` | работа с транзакциями |
+| `1c-transactions-and-locks.mdc` | работа с транзакциями |
 | `1c-extension-patterns.mdc` | расширения |
 | `form_module_rules.mdc`, `forms_events.mdc` | модули форм |
 | `text-formatting.mdc` | запрещённые символы в генерируемом тексте |
