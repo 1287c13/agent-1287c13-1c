@@ -9,7 +9,7 @@
 Репозиторий: **https://github.com/1287c13/agent-1287c13-1-.git**, ветка `main`. Клонировать харнесс на новую машину:
 
 ```powershell
-git clone https://github.com/1287c13/agent-1287c13-1-.git C:\_works\1c-ai\agent
+git clone https://github.com/1287c13/agent-1287c13-1c.git C:\_works\1c-ai\agent
 ```
 
 Дальше - установка с нуля ([раздел 2](#2-установка-с-нуля-по-шагам)).
