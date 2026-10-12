@@ -29,6 +29,22 @@
 
 Версия code-index-mcp записывается в `.cline\mcp\code-index-mcp\VERSION.txt`.
 
+## Vanessa Automation (внешняя обработка для прогона Gherkin-сценариев)
+
+В конфигурацию базы не ставится: платформа запускает её ключом `/Execute`
+(установка и прогон - README, шаг 10).
+
+| Что | Источник | Куда |
+|-----|----------|------|
+| `vanessa-automation-single.epf` (Vanessa Automation 1.2.043.1, BSD-3-Clause) | релиз `vanessa-automation-single.1.2.043.1.zip` из https://github.com/Pr-Mex/vanessa-automation/releases | `.vanessa\` (разворачивает `scripts\install-vanessa.ps1`; каталог в git не хранится) |
+
+Берётся сборка Single: один файл, библиотека шагов уже внутри. По документации того же
+релиза разобраны ключи и формат отчётов - `docs\JsonParams\JsonParamsRU.md` (все ключи
+`VAParams.json`), `docs\FAQ\index.md` (в том числе контексты шагов встроенного языка),
+`tools\JSON\VBParams*.json` (примеры параметров), `tools\onescript\run-behavior-check-session.os`
+(строка запуска сеанса менеджера тестирования). Формулировки шагов берутся не из
+документации, а из реестра харнесса - `.cline\skills\1c-vanessa-steps`.
+
 ## Что отброшено и почему
 
 | Кандидат | Причина отказа |
