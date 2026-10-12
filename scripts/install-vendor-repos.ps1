@@ -10,10 +10,16 @@
 
 .NOTES
   Требует git в PATH. Идемпотентен: существующие репозитории обновляются git pull.
+  Каталог, который существует, но не является git-репозиторием (набор принесён
+  копированием), сам не переклонируется: скрипт остановится с подсказкой, а
+  повторный запуск с -Force переклонирует каталог.
 #>
 [CmdletBinding()]
 param(
-    [string] $Root
+    [string] $Root,
+    # Переклонировать каталог, который существует, но не является git-репозиторием
+    # (содержимое каталога будет удалено).
+    [switch] $Force
 )
 
 $ErrorActionPreference = 'Stop'
@@ -39,18 +45,47 @@ $repos = @(
 
 $env:GIT_TERMINAL_PROMPT = '0'
 
+# git пишет прогресс и предупреждения в stderr: при ErrorActionPreference=Stop
+# это превращается в исключение, поэтому на время git-операций режим ослабляем
+# и проверяем код возврата сами.
+$ErrorActionPreference = 'Continue'
+$failed = New-Object 'System.Collections.Generic.List[string]'
+
 foreach ($url in $repos) {
     $name = ($url -split '/')[-1].Replace('.git', '')
     $dest = Join-Path $vendorDir $name
+
     if (Test-Path (Join-Path $dest '.git')) {
         Write-Host "[pull]  $name"
-        git -C $dest pull --ff-only --depth 1 2>&1 | Out-Null
+        $out = git -C $dest pull --ff-only --depth 1 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            $failed.Add($name)
+            Write-Host '       git pull не удался:' -ForegroundColor Red
+            $out | ForEach-Object { Write-Host "       $_" }
+        }
+        continue
+    }
+
+    if (Test-Path $dest) {
+        if (-not $Force) {
+            $ErrorActionPreference = 'Stop'
+            throw "$dest уже существует, но это не git-репозиторий. Запустите скрипт с -Force, чтобы переклонировать каталог (содержимое каталога будет удалено)."
+        }
+        Write-Host "[force] $name - каталог без .git, переклонирую"
+        Remove-Item $dest -Recurse -Force
     }
     else {
         Write-Host "[clone] $name"
-        git clone --depth 1 $url $dest 2>&1 | Out-Null
+    }
+
+    $out = git clone --depth 1 $url $dest 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $failed.Add($name)
+        Write-Host '       git clone не удался:' -ForegroundColor Red
+        $out | ForEach-Object { Write-Host "       $_" }
     }
 }
+$ErrorActionPreference = 'Stop'
 
 Write-Host ''
 Write-Host 'Коммиты (зафиксируйте в SOURCES.md для воспроизводимости):'
@@ -59,4 +94,10 @@ foreach ($d in Get-ChildItem $vendorDir -Directory) {
         $sha = (git -C $d.FullName rev-parse --short HEAD 2>$null)
         Write-Host ("  {0,-32} {1}" -f $d.Name, $sha)
     }
+}
+
+if ($failed.Count -gt 0) {
+    Write-Host ''
+    Write-Host ("Не развернуты: {0}" -f ($failed -join ', ')) -ForegroundColor Red
+    exit 1
 }

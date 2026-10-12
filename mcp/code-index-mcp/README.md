@@ -13,8 +13,10 @@
 ## Проверка
 
 ```powershell
-$home = 'C:\w\1c\агент\mcp\code-index-mcp'
-& "$home\bsl-indexer.exe" --version      # ожидаем: code-index 1.8.6
+# <КОРЕНЬ> - каталог харнесса (там, где README.md и scripts\)
+$home = '<КОРЕНЬ>\.cline\mcp\code-index-mcp'
+$env:CODE_INDEX_HOME = "$home\home"
+& "$home\bsl-indexer.exe" --version      # ожидаем строку версии индексатора
 & "$home\bsl-indexer.exe" daemon status
 ```
 
@@ -23,16 +25,19 @@ $home = 'C:\w\1c\агент\mcp\code-index-mcp'
 
 ## Папки в индексе
 
-`daemon.toml`:
+`daemon.toml` (лежит в `.cline\mcp\code-index-mcp\home\daemon.toml`, создаёт
+`scripts\enable-mcp.ps1`):
 
 ```toml
 [[paths]]
-path = "C:/w/1c/агент/dump"
-alias = "ar208"
+path = "C:/path/to/dump"
+alias = "main"
 ```
 
-Алиас указывается клиентом в каждом вызове (при одном репозитории — неявно).
-Добавили папку — `bsl-indexer daemon reload`.
+`path` - каталог выгрузки конфигурации (прямые слэши), `alias` - короткое имя
+папки в вызовах. По умолчанию `enable-mcp.ps1` прописывает сюда корень харнесса
+с алиасом `main`: если выгрузка лежит в стороне, замените `path`.
+Добавили папку - `bsl-indexer daemon reload`.
 
 ## Обновление индекса после правок
 
@@ -51,5 +56,6 @@ alias = "ar208"
 * `os error 10048` — порт занят (8011/8015).
 
 ## Ограничение
-Индекс — это **снимок выгрузки**. Правки в базе, не отражённые в `dump\`, для
-агента невидимы: обновите выгрузку (`scripts\dump-config.ps1`).
+Индекс - это **снимок выгрузки**. Правки в базе, не отражённые в каталоге
+выгрузки, для агента невидимы: обновите выгрузку (скилл `1c-db-dump-xml`) -
+демон сам подхватит изменённые файлы.
