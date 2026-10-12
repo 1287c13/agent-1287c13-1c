@@ -16,8 +16,8 @@
 | XML объекта, формы, роли, СКД, расширения | скиллы `*-validate`, `1c-*-validate` | `Validation OK` / `валид` |
 | Что платформа реально примет | загрузка в базу: `db-load-xml`, `db-update` | платформа не отвергла |
 | Существование и сигнатура метода платформы | MCP `1c-platform-help`: `info` / `get_member` | метод есть, сигнатура совпала |
-| Автотест (Gherkin/Vanessa) | запуск сценария в базе | сценарий завершён без упавших шагов |
-| Gherkin/Vanessa, прогон невозможен (в базе нет Vanessa) | скилл `1c-vanessa-steps`: `scripts\validate.py` | 0 невалидных шагов; в отчёте прямо сказано: «прогон не выполнен, Vanessa в базе нет» |
+| Автотест (Gherkin/Vanessa), прогон | `scripts\vanessa-run.ps1` (Vanessa - внешняя обработка платформы) | `.vanessa\status.txt` = 0 и в `.vanessa\junit\junit.xml` `failures="0" errors="0"` |
+| Gherkin/Vanessa, прогон невозможен (нет свободного клиентского слота в базе, `.clinerules/40-lessons.md` п.12) | скилл `1c-vanessa-steps`: `scripts\validate.py` | 0 невалидных шагов; в отчёте прямо сказано: «прогон не выполнен, причина - лицензия на клиентов / нет учётных данных» |
 
 ## Правила
 

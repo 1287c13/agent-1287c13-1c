@@ -17,6 +17,7 @@
 | Как писать BSL по стандартам, строгая типизация | справка платформы | MCP `1c-platform-help` |
 | Формат объекта метаданных, сборка/разбор XML, валидация | скиллы | `.cline\skills\*` |
 | Gherkin/Vanessa, сценарии автотестов | скиллы | `.cline\skills\va-*`, `vanessa-*` |
+| Прогнать Gherkin-сценарий в базе | скрипты харнесса + живая база | `scripts\vanessa-run.ps1` (Vanessa - внешняя обработка платформы, в конфигурацию не ставится); предпосылки - `.clinerules\40-lessons.md`, п.12 |
 | Свойства конкретной информационной базы (путь, платформа) | файлы проекта | `.v8-project.json` |
 
 ## MCP-серверы харнесса
@@ -81,7 +82,7 @@ BSL внутри базы), `get_metadata` (состав и структура �
 | Роли, СКД, макеты, XDTO, подсистемы | `role-*`, `skd-*`, `mxl-*`, `xdto-*`, `subsystem-*` |
 | Расширения и внешние обработки | `cfe-*`, `epf-*`, `erf-*`, `1c-cfe-*` |
 | Веб-публикация и тесты в браузере | `web-publish`, `web-test`, `web-info` |
-| Gherkin и Vanessa Automation | `va-scenario-generator`, `Vanessa_for_AI` |
+| Gherkin и Vanessa Automation (авторство сценария) | `va-scenario-generator`, `Vanessa_for_AI`, `1c-vanessa-steps`; прогон - не скилл, а `scripts\vanessa-run.ps1` |
 | Валидация результата без платформы | `1c-bsl-validate`, `1c-code-review`, `*-validate` |
 | Стандарты BSL и строгая типизация | правило `skills-vendor\cursor-1c-skills\rules\1c-coding-standards.mdc` |
 
