@@ -141,3 +141,10 @@ robocopy больших каталогов) дробить по частям. У
 родителя, после такого прерывания `.venv` остаётся недособранным (нет
 `Scripts\mcp-bsl-context.exe`) и нужен повторный запуск `install-mcp.ps1`.
 
+**6.6. `git push` в PowerShell 5.1 - ложный сбой.** git пишет прогресс push в stderr
+(`To https://github.com/...`, `Everything up-to-date`), PowerShell 5.1 превращает это
+в `NativeCommandError`, и харнесс видит код возврата 1 - хотя push уже прошёл. Гасить
+шум: `git push --quiet origin main` (тихий push stderr не пишет). Проверять отправку по
+факту, а не по коду возврата: `git ls-remote origin refs/heads/main` и сверить хеш с
+`git rev-parse HEAD` либо `git status -sb` (нет ahead/behind - все отправлено).
+
