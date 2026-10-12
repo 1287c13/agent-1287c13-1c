@@ -5,11 +5,11 @@
 
 .DESCRIPTION
   Cline (VS Code extension saoudrizwan.claude-dev) читает project-скиллы из
-  <project>\.cline\skills\<skill-name>\SKILL.md — подробнее docs\08-skill-router.md.
+  <project>\.cline\skills\<skill-name>\SKILL.md — подробнее docs\05-skills.md.
 
   Скрипт копирует каталоги скиллов из skills-vendor\* в .cline\skills\.
   Порядок источников = приоритет: последний источник перекрывает предыдущий
-  при совпадении имени каталога скилла (см. договор о конфликтах в SOURCES.md).
+  при совпадении имени каталога скилла (см. docs\05-skills.md, «Источники»).
 
 .NOTES
   Идемпотентен: повторный запуск перезаписывает .cline\skills заново.

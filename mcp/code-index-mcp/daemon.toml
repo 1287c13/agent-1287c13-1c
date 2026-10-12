@@ -1,10 +1,17 @@
+# ОБРАЗЕЦ daemon.toml индексатора кода (`1c-code-index`).
+#
+# Рабочий файл скрипты создают сами: scripts\enable-mcp.ps1 ->
+#   .cline\mcp\code-index-mcp\home\daemon.toml
+# (path = корень харнесса, alias = "main"). Ниже - формат для ручных правок:
+# перечислите каталоги выгрузок конфигурации, которые должен видеть агент.
+
 [daemon]
 http_host = "127.0.0.1"
 http_port = 8015
 log_level = "info"
 
 [[paths]]
-path = "C:/w/1c/агент/dump"
-alias = "ar208"
+path = "C:/path/to/dump"   # каталог выгрузки XML, прямые слэши
+alias = "main"             # короткое имя для вызовов: repo = "main"
 language = "bsl"
 

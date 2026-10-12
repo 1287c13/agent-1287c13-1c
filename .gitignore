@@ -13,11 +13,8 @@ cache/
 *.epf
 *.log
 
-# --- бинарники и состояние MCP ---
-mcp/code-index-mcp/*.exe
-mcp/code-index-mcp/daemon.json
-mcp/code-index-mcp/daemon.pid
-mcp/optional/
+# --- рантайм MCP: бинарники, venv, состояние (ставит scripts\install-mcp.ps1) ---
+# всё это лежит в .cline\mcp\ и покрыто правилом ниже; в mcp\ - только доки и образцы
 
 # --- окружение ---
 .venv/
