@@ -217,14 +217,24 @@ $runtimePrefixes = @('.cline\mcp', '.cline\skills', '.vanessa', '.code-index', '
 # Имена, которые создаются рантаймом в любом месте (настройки обработки, метка версии).
 $runtimeLeaves = @('params.json', 'version.txt')
 # Индекс имён файлов проекта: некоторые ссылки называют только имя файла.
+# Тяжёлые каталоги отсекаются на уровне файловой системы. Get-ChildItem -Recurse по корню
+# сначала полностью перечисляет их содержимое (в dump\ - свыше 127 тыс. файлов XML-выгрузки),
+# и проверка уходит за минуты, хотя эти файлы всё равно отбрасываются. Обход - свой стек
+# по EnumerateDirectories/EnumerateFiles с пропуском каталога целиком, не заходя в него.
 $skipDirs = @('.git', 'dump', 'cache', 'logs', '.tmp', '.code-index')
 $nameIndex = @{}
-foreach ($item in (Get-ChildItem $Root -Recurse -File -Force -ErrorAction SilentlyContinue)) {
-    $skipThis = $false
-    foreach ($s in $skipDirs) { if ($item.FullName -like "*\$s\*") { $skipThis = $true } }
-    if ($skipThis) { continue }
-    $n = $item.Name.ToLower()
-    if ($nameIndex.ContainsKey($n)) { $nameIndex[$n] = $nameIndex[$n] + 1 } else { $nameIndex[$n] = 1 }
+$scanStack = New-Object System.Collections.Stack
+$scanStack.Push($Root)
+while ($scanStack.Count -gt 0) {
+    $scanDir = $scanStack.Pop()
+    foreach ($sub in [System.IO.Directory]::EnumerateDirectories($scanDir)) {
+        if ($skipDirs -contains (Split-Path -Leaf $sub)) { continue }
+        $scanStack.Push($sub)
+    }
+    foreach ($file in [System.IO.Directory]::EnumerateFiles($scanDir)) {
+        $n = (Split-Path -Leaf $file).ToLower()
+        if ($nameIndex.ContainsKey($n)) { $nameIndex[$n] = $nameIndex[$n] + 1 } else { $nameIndex[$n] = 1 }
+    }
 }
 Info "файлов в индексе имён: $($nameIndex.Count) (ссылки ищутся по точному пути, затем по имени файла)"
 $seen = @{}
