@@ -360,7 +360,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-harness.ps1
 
 Так ставятся задачи про инструмент агента: правила `.clinerules/`, доки `docs/`, скрипты
 `scripts/`, формат задачи. Границы - `.clinerules/50-harness.md`; проверка таких задач -
-`check-harness.ps1` и `check-docs.ps1`.
+`check-harness.ps1` и `check-docs.ps1`. Такая задача заканчивается коммитом и отправкой в
+`origin` (`git push --quiet origin main`, сверка `git ls-remote origin refs/heads/main` с
+`git rev-parse HEAD`). В задачах по базе 1С git не трогается никогда: результат такой
+задачи - не в репозитории, а в каталоге `analysis\` (файл с меткой времени, `.gitignore`).
 
 ### Базы этого харнесса
 
