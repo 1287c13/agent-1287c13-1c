@@ -81,9 +81,11 @@ Cline (VS Code)
 │   │   └── bsl-platform-help-context/  venv + mcp-bsl-context.exe
 │   └── skills/                    206 скиллов (собираются из skills-vendor, не в git)
 ├── .v8-project.json               базы и путь к платформе 1С
+├── analysis/                      результаты анализа агента: разборы кейсов и расследования,
+│                                  имя файла - метка времени плюс краткое имя (в git не хранятся)
 ├── docs/                          описание решения; docs/legacy - документация первой версии
 ├── mcp/                           доки и пример конфигурации по MCP-серверам
-├── scripts/                       install / start / check / publish + start-toolkit / stop-toolkit / vanessa-run
+├── scripts/                       install / start / check / publish + start-toolkit / stop-toolkit / vanessa-run / new-analysis
 └── skills-vendor/                 вендорские репозитории (в git не хранятся)
 ```
 

@@ -12,7 +12,10 @@
     - пути и имена файлов, названные в доках в обратных кавычках, - существуют ли они;
     - имена MCP-инструментов из .clinerules\10-mcp-and-skills.md - есть ли они в офлайн-описаниях серверов;
     - ревизии вендоров в skills-vendor против таблицы SOURCES.md (только предупреждение);
-    - обязательные строки .gitignore.
+    - обязательные строки .gitignore;
+    - сохранение анализа: скрипт scripts\new-analysis.ps1, требования правил (артефакт
+      анализа в каталоге analysis, запрет коммита в задачах по базе, отправка правок
+      в origin у задач по харнессу).
 
 .NOTES
   Ничего не меняет. Код возврата 0 - расхождений нет, 1 - есть.
@@ -213,7 +216,7 @@ $pathRe = [regex]'`([A-Za-zА-Яа-яЁё0-9_\-\\/\.]+\.(?:ps1|md|json|epf|featu
 # Файлы вне репозитория: справка установленной платформы и содержимое чужих архивов.
 $externalLeaves = @('shcntx_ru.hbk', 'v8-project-guide.md', 'jsonparamsru.md', 'index.md', 'vbparams.json', 'run-behavior-check-session.os')
 # Рантайм: появляется после установки, в git не хранится.
-$runtimePrefixes = @('.cline\mcp', '.cline\skills', '.vanessa', '.code-index', 'dump', 'logs', 'cache', 'temp', 'skills-vendor', 'docs\jsonparams')
+$runtimePrefixes = @('.cline\mcp', '.cline\skills', '.vanessa', '.code-index', 'dump', 'logs', 'cache', 'temp', 'analysis', 'skills-vendor', 'docs\jsonparams')
 # Имена, которые создаются рантаймом в любом месте (настройки обработки, метка версии).
 $runtimeLeaves = @('params.json', 'version.txt')
 # Индекс имён файлов проекта: некоторые ссылки называют только имя файла.
@@ -221,7 +224,7 @@ $runtimeLeaves = @('params.json', 'version.txt')
 # сначала полностью перечисляет их содержимое (в dump\ - свыше 127 тыс. файлов XML-выгрузки),
 # и проверка уходит за минуты, хотя эти файлы всё равно отбрасываются. Обход - свой стек
 # по EnumerateDirectories/EnumerateFiles с пропуском каталога целиком, не заходя в него.
-$skipDirs = @('.git', 'dump', 'cache', 'logs', 'temp', '.code-index')
+$skipDirs = @('.git', 'dump', 'cache', 'logs', 'temp', 'analysis', '.code-index')
 $nameIndex = @{}
 $scanStack = New-Object System.Collections.Stack
 $scanStack.Push($Root)
@@ -330,13 +333,40 @@ $gitignore = Join-Path $Root '.gitignore'
 if (-not (Test-Path $gitignore)) { Bad 'нет .gitignore' }
 else {
     $gi = Get-Content $gitignore -Raw -Encoding UTF8
-    $required = @('.vanessa/', 'skills-vendor/', '.cline/mcp/', '.cline/skills/', 'dump/', '*.epf', '.code-index/', 'temp/')
+    $required = @('.vanessa/', 'skills-vendor/', '.cline/mcp/', '.cline/skills/', 'dump/', '*.epf', '.code-index/', 'temp/', 'analysis/')
     $missingRules = @()
     foreach ($r in $required) {
         if ($gi -notmatch ('(?m)^\s*' + [regex]::Escape($r) + '\s*$')) { $missingRules += $r }
     }
     if ($missingRules.Count -eq 0) { Ok "все обязательные записи на месте: $($required -join ', ')" }
     else { foreach ($r in $missingRules) { Bad "нет строки в .gitignore: $r" } }
+}
+
+# --- 8. Результат анализа и git-дисциплина ------------------------------------
+Head 'Результат анализа и git (каталог analysis)'
+$analysisScript = Join-Path $Root 'scripts\new-analysis.ps1'
+if (Test-Path $analysisScript) { Ok 'скрипт scripts\new-analysis.ps1 на месте' }
+else { Bad 'нет scripts\new-analysis.ps1 - результат анализа негде завести' }
+$analysisDir = Join-Path $Root 'analysis'
+if (Test-Path $analysisDir) {
+    $aFiles = @(Get-ChildItem $analysisDir -Filter *.md -File -ErrorAction SilentlyContinue | Sort-Object Name)
+    if ($aFiles.Count -gt 0) { Info "файлов анализа: $($aFiles.Count); последний: $($aFiles[-1].Name)" }
+    else { Info 'каталог analysis есть, файлов анализа в нем нет' }
+}
+else { Info 'каталога analysis нет - его создаст scripts\new-analysis.ps1' }
+# Требования правил: артефакт анализа, запрет коммита в задачах по базе, отправка правок.
+$ruleChecks = @(
+    @{ File = '.clinerules\00-contract.md'; Pattern = 'analysis\\';     Hint = 'правило: результат анализа идет в каталог analysis' },
+    @{ File = '.clinerules\00-contract.md'; Pattern = 'Не коммитить';  Hint = 'правило: в задачах по базе коммитить нельзя' },
+    @{ File = '.clinerules\50-harness.md';  Pattern = 'analysis\\';     Hint = 'правило: результат анализа идет в каталог analysis' },
+    @{ File = '.clinerules\50-harness.md';  Pattern = 'git push';       Hint = 'правило: задача по харнессу заканчивается отправкой в origin' }
+)
+foreach ($rc in $ruleChecks) {
+    $rcPath = Join-Path $Root $rc.File
+    if (-not (Test-Path $rcPath)) { Bad "нет $(Rel $rcPath) - проверить нечего ($($rc.Hint))" ; continue }
+    $rcText = Get-Content $rcPath -Raw -Encoding UTF8
+    if ($rcText -match $rc.Pattern) { Ok "$(Rel $rcPath): $($rc.Hint)" }
+    else { Bad "$(Rel $rcPath): нет - $($rc.Hint)" }
 }
 
 Head 'Итог'

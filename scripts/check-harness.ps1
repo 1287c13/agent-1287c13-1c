@@ -14,6 +14,8 @@
     - прогон Gherkin/Vanessa (по требованию задачи): обработка, сценарии, VAParams;
     - учётные данные баз (user/password) для подключения и прогона;
     - занятость клиентских сеансов 1С (лицензия на клиентов);
+    - каталог результатов анализа (analysis) и последний разбор;
+    - git: незакоммиченные изменения и неотправленные коммиты (origin);
     - развёрнутость вендорских репозиториев (skills-vendor).
 
 .NOTES
@@ -198,7 +200,38 @@ if (Test-Path $tempDir) { Ok 'каталог temp на месте - единст
 else { Warn 'нет каталога temp - создайте его: временные файлы задачи (разовые скрипты, логи, черновики) хранятся только здесь' }
 if (Test-Path (Join-Path $Root '.tmp')) { Warn 'остался старый каталог .tmp - временные файлы должны лежать в temp\, каталог .tmp удалите' }
 
-# --- 11. Вендорские репозитории ---------------------------------------------
+# --- 11. Результаты анализа --------------------------------------------------
+Head 'Результаты анализа (analysis)'
+$analysisDir = Join-Path $Root 'analysis'
+if (Test-Path $analysisDir) {
+    $aFiles = @(Get-ChildItem $analysisDir -Filter *.md -File -ErrorAction SilentlyContinue | Sort-Object Name)
+    if ($aFiles.Count -gt 0) { Ok "файлов анализа: $($aFiles.Count); последний: $($aFiles[-1].Name)" }
+    else { Info 'каталог analysis есть, файлов анализа в нем нет - разборов еще не сохраняли' }
+}
+else { Info 'каталога analysis нет - его создаст scripts\new-analysis.ps1 при первом разборе' }
+if (Test-Path (Join-Path $Root 'scripts\new-analysis.ps1')) { Ok 'скрипт scripts\new-analysis.ps1 на месте' }
+else { Warn 'нет scripts\new-analysis.ps1 - результат анализа негде завести' }
+
+# --- 12. Git: изменения и отправка -------------------------------------------
+Head 'Git (изменения и отправка в origin)'
+if (Test-Path (Join-Path $Root '.git')) {
+    $branch = ((& git -C $Root rev-parse --abbrev-ref HEAD 2>$null) | Out-String).Trim()
+    $head = ((& git -C $Root rev-parse --short HEAD 2>$null) | Out-String).Trim()
+    if ($branch) { Info "ветка: $branch, HEAD: $head" }
+    $dirty = @(& git -C $Root status --porcelain 2>$null)
+    if ($dirty.Count -gt 0) {
+        Warn "незакоммиченных изменений: $($dirty.Count) - задача по харнессу заканчивается коммитом и отправкой"
+    }
+    else { Ok 'рабочее дерево чистое' }
+    $sb = ((& git -C $Root status -sb 2>$null) | Out-String)
+    if ($sb -match 'ahead (\d+)') {
+        Warn "не отправлено коммитов: $($Matches[1]) - выполните git push --quiet origin main и сверьте git ls-remote origin refs/heads/main с git rev-parse HEAD"
+    }
+    else { Info 'неотправленных коммитов нет' }
+}
+else { Warn 'каталога .git нет - состояние синхронизации с GitHub не проверить' }
+
+# --- 13. Вендорские репозитории ---------------------------------------------
 Head 'Вендорские репозитории (skills-vendor)'
 $vendorDir = Join-Path $Root 'skills-vendor'
 $vendorRepos = @('cc-1c-skills', 'cursor-1c-skills', 'mcp-bsl-platform-help-context', 'Vanessa_for_AI', 'va-ai-autotests', 'product-analyst', '1c-mcp-toolkit')

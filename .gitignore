@@ -7,6 +7,9 @@ cache/
 .code-index/
 temp/
 
+# --- результаты анализа агента: разборы кейсов и расследования (создаёт scripts\new-analysis.ps1) ---
+analysis/
+
 # --- рантайм прогонов Vanessa Automation (epf, VAParams, логи, статус) ---
 .vanessa/
 

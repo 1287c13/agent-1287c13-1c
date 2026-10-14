@@ -415,8 +415,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-harness.ps1
 | `.v8-project.json` | базы 1С и путь к платформе |
 | `.vanessa/` | внешняя обработка Vanessa Automation, собранный `VAParams.json` и результаты прогонов; в git не хранится (шаг 10) |
 | `temp/` | временные файлы задач: разовые скрипты, выгрузки ответов, логи, черновики. В git не хранится; правило - временные файлы создаются только здесь |
+| `analysis/` | результаты анализа агента: разборы кейсов и расследования. Имя файла - `<ГГГГ-ММ-ДД>_<ЧЧММ>_<краткое-имя>.md`, создает `scripts/new-analysis.ps1`. В git не хранится |
 | `dump/` | выгрузки конфигураций в XML, по подпапке на конфигурацию (`dump\КомплекснаяАвтоматизация`), рядом логи запуска выгрузки. В git не хранится, каталоги индексирует `1c-code-index` (шаг 9) |
-| `scripts/` | установка, запуск, диагностика (`check-harness.ps1`, `check-docs.ps1`), живая база (`start-toolkit.ps1`, `stop-toolkit.ps1`), публикация OData (`publish-odata.ps1`), прогон Vanessa (`vanessa-run.ps1`); `install-vanessa.ps1` - вспомогательный, в git не хранится |
+| `scripts/` | установка, запуск, диагностика (`check-harness.ps1`, `check-docs.ps1`), живая база (`start-toolkit.ps1`, `stop-toolkit.ps1`), публикация OData (`publish-odata.ps1`), прогон Vanessa (`vanessa-run.ps1`), файл анализа (`new-analysis.ps1`); `install-vanessa.ps1` - вспомогательный, в git не хранится |
 | `skills-vendor/` | вендорские репозитории: в git не хранятся, разворачиваются `install-vendor-repos.ps1` (каталог без `.git` - с ключом `-Force`) |
 | `SOURCES.md` | внешние источники и зафиксированные версии |
 | `docs/` | описание решения; `docs/legacy/` - документация первой версии, для установки не годится (скриптов, на которые она ссылается, в репозитории больше нет) |
