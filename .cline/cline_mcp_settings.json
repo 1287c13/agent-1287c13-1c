@@ -30,6 +30,7 @@
       },
       "disabled": false,
       "autoApprove": ["get_stats", "health", "read_file", "list_files", "stat_file"],
+      "disabledTools": ["get_imports", "get_class", "search_class", "get_callees", "find_path", "get_call_tree"],
       "timeout": 120,
       "type": "stdio"
     },
@@ -38,6 +39,7 @@
       "url": "http://127.0.0.1:6003/mcp",
       "disabled": false,
       "autoApprove": [],
+      "disabledTools": ["submit_for_deanonymization", "close_1c_session"],
       "timeout": 120
     }
   }

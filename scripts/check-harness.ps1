@@ -245,6 +245,22 @@ if (Test-Path $vendorDir) {
 }
 else { Bad 'нет каталога skills-vendor - выполните scripts\install-vendor-repos.ps1' }
 
+# --- 14. Промпт-бюджет (всегда-инжектируемый префикс) -------------------------
+# Файлы .clinerules\, AGENTS.md и метаданные скиллов уходят в каждый запрос целиком.
+# Бюджет и разбор по файлам - в scripts\check-context.ps1 (там же ключ -Mcp).
+Head 'Промпт-бюджет (что уходит в каждый запрос)'
+$ctxScript = Join-Path $Root 'scripts\check-context.ps1'
+if (Test-Path $ctxScript) {
+    $ctxOut  = & powershell -NoProfile -ExecutionPolicy Bypass -File $ctxScript -Quiet -Root $Root 2>&1 | Out-String
+    $ctxCode = $LASTEXITCODE
+    if ($ctxCode -eq 0) { Ok $ctxOut.Trim() }
+    else {
+        foreach ($ln in ($ctxOut -split "`r?`n" | Where-Object { $_.Trim() -ne '' })) { Bad $ln.Trim() }
+    }
+    Info 'подробно (по файлам и бюджетам): powershell -File scripts\check-context.ps1'
+}
+else { Bad 'нет scripts\check-context.ps1 - бюджет префикса не проверяется' }
+
 Head 'Итог'
 if ($script:problems -eq 0) { Write-Host 'Проблем не найдено.' -ForegroundColor Green; exit 0 }
 Write-Host "Замечаний, требующих действия: $script:problems" -ForegroundColor Red
