@@ -44,7 +44,10 @@
     id базы из .v8-project.json. По умолчанию - поле "default".
 
 .PARAMETER Features
-    Каталог фич или путь к одному .feature файлу. По умолчанию <корень>\features.
+    Каталог фич или путь к одному .feature файлу. По умолчанию <корень>\temp\features:
+    сценарий, собранный под задачу, - временный артефакт, а temp\ - единственное место
+    временных файлов задачи (.clinerules\00-contract.md, п.4). Каталог features\ в корне
+    репозитория не создаётся и не хранится.
 
 .PARAMETER Epf
     Внешняя обработка Vanessa Automation.
@@ -92,7 +95,7 @@
 
 .EXAMPLE
     powershell -NoProfile -ExecutionPolicy Bypass -File scripts\vanessa-run.ps1 `
-        -DatabaseId demo-ar -Features .\features\Печать_ТОРГ12_ИзРеализацииТоваровУслуг.feature -NoWait
+        -DatabaseId demo-ar -Features .\temp\features\Печать_ТОРГ12_ИзРеализацииТоваровУслуг.feature -NoWait
 #>
 [CmdletBinding()]
 param(
@@ -184,9 +187,9 @@ if (-not (Test-Path -LiteralPath $Epf)) {
     }
     Write-Host "  развёрнуто: $deployedFrom" -ForegroundColor Green
 }
-if ([string]::IsNullOrWhiteSpace($Features)) { $Features = Join-Path $projectRoot 'features' }
+if ([string]::IsNullOrWhiteSpace($Features)) { $Features = Join-Path $projectRoot 'temp\features' }
 $Features = [System.IO.Path]::GetFullPath($Features)
-if (-not (Test-Path -LiteralPath $Features)) { throw "Не найден каталог фич или файл: $Features" }
+if (-not (Test-Path -LiteralPath $Features)) { throw "Не найден каталог фич или файл: $Features. Сценарий под задачу кладётся в temp\features\ (единственное место временных файлов задачи)" }
 
 foreach ($f in @($statusFile, $logFile)) { if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force } }
 if (-not (Test-Path -LiteralPath $junitDir)) { New-Item -ItemType Directory -Path $junitDir -Force | Out-Null }

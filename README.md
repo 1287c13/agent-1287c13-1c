@@ -292,11 +292,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-vanessa.ps
 2. Прогнать сценарии:
 
 ```powershell
-# весь каталог features
+# весь каталог сценариев (по умолчанию temp\features)
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\vanessa-run.ps1
 
-# один сценарий
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\vanessa-run.ps1 -Features .\features\Smoke\ДымовойТест_ОткрытиеСпискаНоменклатуры.feature
+# один сценарий (.feature - временный артефакт задачи, живёт в temp\features\)
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\vanessa-run.ps1 -Features .\temp\features\Smoke\ДымовойТест_ОткрытиеСпискаНоменклатуры.feature
 
 # база занята сеансом toolkit - погасить его на время прогона и поднять обратно
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\vanessa-run.ps1 -FreeToolkit
@@ -318,7 +318,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\vanessa-run.ps1 -N
 
 Результаты прогона складываются в `.vanessa\`: `status.txt` (0 - сценарии прошли, 1 - есть упавшие), `va-log.txt` (лог по шагам; при падении шага - текст ошибки, выполняемый код и техданные), `junit\junit.xml` (машиночитаемый отчёт). Имя файла отчёта - именно `junit.xml` (проверено прогоном), а не `Steps.xml`, как иногда пишут в статьях. Без `-NoWait` скрипт ждёт закрытия сеанса (`-TimeoutSec`, по умолчанию 1800 с) - в этом харнессе команда оболочки живёт 30 с, поэтому длинные прогоны запускайте с `-NoWait` и смотрите статус отдельно. <!-- check-docs:ignore: status.txt и va-log.txt создаёт прогон в .vanessa\, в репозитории их нет по устройству -->
 
-**Прогон проверен на этой машине дважды.** 12.10.2026 (Vanessa 1.2.043.1, платформа 8.3.27.2130): сценарий `features\Smoke\ДымовойТест_ВыполнениеКодаНаСервере.feature` прогнан в базе `demo-ssl` - `status.txt` = `0`, в `junit\junit.xml` `failures="0" errors="0" tests="1"`. 14.10.2026 тем же сценарием проверен автоматический путь: `-FreeToolkit` сам погасил сеанс toolkit, прогон прошёл (`tests="1" failures="0" errors="0"`, `time="26.805"`), сеанс тестирования закрылся сам. Сценарий намеренно не привязан к объектам метаданных, поэтому годится как дымовой для любой базы.
+**Прогон проверен на этой машине дважды.** 12.10.2026 (Vanessa 1.2.043.1, платформа 8.3.27.2130): дымовой сценарий-образец (тогда каталог сценариев ещё хранился в репозитории; с 14.10.2026 `.feature` - временный артефакт в `temp`) прогнан в базе `demo-ssl` - `status.txt` = `0`, в `junit\junit.xml` `failures="0" errors="0" tests="1"`. 14.10.2026 тем же сценарием проверен автоматический путь: `-FreeToolkit` сам погасил сеанс toolkit, прогон прошёл (`tests="1" failures="0" errors="0"`, `time="26.805"`), сеанс тестирования закрылся сам. Сценарий намеренно не привязан к объектам метаданных, поэтому годится как дымовой для любой базы.
 
 **Два ограничения машины, о которые спотыкается первый запуск.**
 
@@ -417,7 +417,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-harness.ps1
 | `.cline/mcp/code-index-mcp/home/daemon.toml` | какие каталоги индексирует `1c-code-index` (создаёт `enable-mcp.ps1`) |
 | `.v8-project.json` | базы 1С и путь к платформе |
 | `.vanessa/` | внешняя обработка Vanessa Automation, собранный `VAParams.json` и результаты прогонов; в git не хранится (шаг 10) |
-| `temp/` | временные файлы задач: разовые скрипты, выгрузки ответов, логи, черновики. В git не хранится; правило - временные файлы создаются только здесь |
+| `temp/` | временные файлы задач: разовые скрипты, выгрузки ответов, логи, черновики и сценарии `.feature` (`temp\features\`). В git не хранится; правило - временные файлы создаются только здесь, за собой их убирают. Каталог `features\` в корне не заводится: сценарии - временный артефакт, ловит `check-harness.ps1` |
 | `analysis/` | результаты анализа агента: разборы кейсов и расследования. Имя файла - `<ГГГГ-ММ-ДД>_<ЧЧММ>_<краткое-имя>.md`, создает `scripts/new-analysis.ps1`. В git не хранится |
 | `dump/` | выгрузки конфигураций в XML, по подпапке на конфигурацию (`dump\КомплекснаяАвтоматизация`), рядом логи запуска выгрузки. В git не хранится, каталоги индексирует `1c-code-index` (шаг 9) |
 | `scripts/` | установка, запуск, диагностика (`check-harness.ps1`, `check-docs.ps1`), живая база (`start-toolkit.ps1`, `stop-toolkit.ps1`), публикация OData (`publish-odata.ps1`), прогон Vanessa (`vanessa-run.ps1`), файл анализа (`new-analysis.ps1`); `install-vanessa.ps1` - вспомогательный, в git не хранится |

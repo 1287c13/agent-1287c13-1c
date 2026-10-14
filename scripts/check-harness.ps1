@@ -157,13 +157,20 @@ $epf = Join-Path $Root '.vanessa\vanessa-automation-single.epf'
 if (Test-Path $epf) { Ok 'внешняя обработка развёрнута (.vanessa\vanessa-automation-single.epf)' }
 else { Info 'нет .vanessa\vanessa-automation-single.epf - его развернёт сам scripts\vanessa-run.ps1' }
 Info 'сеанс toolkit под прогон освобождает и возвращает сам: scripts\vanessa-run.ps1 -FreeToolkit'
-$featuresDir = Join-Path $Root 'features'
-if (Test-Path $featuresDir) {
-    $fCount = @(Get-ChildItem $featuresDir -Recurse -Filter *.feature -File -ErrorAction SilentlyContinue).Count
-    if ($fCount -gt 0) { Ok "$fCount сценариев .feature в features\" }
-    else { Info 'каталог features\ есть, но .feature в нём нет' }
+$featuresLegacy = Join-Path $Root 'features'
+if (Test-Path $featuresLegacy) {
+    Warn 'каталог features\ в корне: сценарии .feature - временный артефакт задачи, их место temp\features\ (каталог удалить, .gitignore его закрывает)'
 }
-else { Info 'нет каталога features\ - сюда кладутся сценарии для scripts\vanessa-run.ps1' }
+$featuresDir = Join-Path $Root 'temp\features'
+if (Test-Path $featuresDir) {
+    $fFiles = @(Get-ChildItem $featuresDir -Recurse -Filter *.feature -File -ErrorAction SilentlyContinue)
+    if ($fFiles.Count -gt 0) {
+        $oldest = $fFiles | Sort-Object LastWriteTime | Select-Object -First 1
+        Info "сценариев .feature в temp\features: $($fFiles.Count); самый старый - $($oldest.LastWriteTime.ToString('dd.MM.yyyy')); за собой их убирают (temp\ - не склад)"
+    }
+    else { Info 'каталог temp\features\ есть, .feature в нём нет' }
+}
+else { Info 'нет temp\features\ - сюда создаётся сценарий под задачу (дефолт scripts\vanessa-run.ps1)' }
 if (Test-Path (Join-Path $Root '.vanessa\VAParams.json')) { Ok 'VAParams.json собран (остался от прошлого прогона)' }
 else { Info 'VAParams.json ещё не собран - его готовит scripts\vanessa-run.ps1 перед прогоном' }
 

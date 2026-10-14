@@ -10,7 +10,12 @@
 #>
 [CmdletBinding()]
 param([string]$Path)
-if (-not $Path) { $Path = Split-Path -Parent $PSScriptRoot }
+# По умолчанию правим .ps1 самого харнесса (каталог scripts). Значением по умолчанию НЕ должен
+# быть корень проекта: рекурсивный обход dump\, skills-vendor\ и .code-index\ - это минуты
+# (именно это дало таймаут). Широкий обход задаётся явно: -Path <каталог>.
+if (-not $Path) {
+    $Path = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent (Resolve-Path $PSCommandPath).Path }
+}
 
 $enc = New-Object System.Text.UTF8Encoding($true)
 $files = Get-ChildItem -Path $Path -Filter *.ps1 -Recurse -ErrorAction SilentlyContinue

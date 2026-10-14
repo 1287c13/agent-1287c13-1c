@@ -9,7 +9,7 @@
 
 - `START.md`, `AGENTS.md`, `README.md`, `SOURCES.md`;
 - `.clinerules/*.md`;
-- `docs/*.md` (кроме `docs/legacy/*` - это архив первой версии, не инструкция);
+- `docs/*.md`;
 - `scripts/*.ps1`.
 
 Нельзя (границы заданы устройством харнесса, а не вкусом):
@@ -21,10 +21,13 @@
 - `.cline/mcp/*` - рантайм: бинарники и venv, ставятся `scripts/install-mcp.ps1`;
 - `.vanessa/`, `dump/`, `logs/`, `cache/`, `.code-index/`, `temp/`, `analysis/` - рабочие каталоги (в `.gitignore`);
 - `temp/` - единственное место временных файлов задачи: разовых скриптов, выгрузок ответов,
-  логов, черновиков. Каталог создаётся при необходимости (`New-Item -ItemType Directory temp`),
-  если его нет. Временный файл, оставленный в корне, `scripts\`, `docs\`, `.clinerules\`
-  или `features\`, - нарушение протокола; наличие каталога проверяет `scripts\check-harness.ps1`
-  (раздел «Временные файлы (temp)»);
+  логов, черновиков и сценариев `.feature`, собранных под задачу (`.feature` - в
+  `temp\features\`, дефолт `scripts\vanessa-run.ps1`). Каталог создаётся при необходимости
+  (`New-Item -ItemType Directory temp`), если его нет. Временный файл, оставленный в корне,
+  `scripts\`, `docs\`, `.clinerules\` или `features\`, - нарушение протокола; каталог
+  `features\` в корне - тоже (сценарии в git не хранятся, он закрыт `.gitignore`); наличие
+  `temp\`, остатки `features\` и возраст сценариев в `temp\features\` проверяет
+  `scripts\check-harness.ps1` (раздел «Прогон Gherkin/Vanessa»);
 - `analysis/` - результаты анализа агента: разборы кейсов, расследования, объяснения
   «почему так». Имя файла - `<ГГГГ-ММ-ДД>_<ЧЧММ>_<краткое-имя>.md`; создаёт
   `scripts\new-analysis.ps1` (`-Name`, `-Title`, `-Task`). Каталог в `.gitignore`: анализ -

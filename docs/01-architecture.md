@@ -83,9 +83,10 @@ Cline (VS Code)
 ├── .v8-project.json               базы и путь к платформе 1С
 ├── analysis/                      результаты анализа агента: разборы кейсов и расследования,
 │                                  имя файла - метка времени плюс краткое имя (в git не хранятся)
-├── docs/                          описание решения; docs/legacy - документация первой версии
+├── docs/                          описание решения
 ├── mcp/                           доки и пример конфигурации по MCP-серверам
 ├── scripts/                       install / start / check / publish + start-toolkit / stop-toolkit / vanessa-run / new-analysis
+├── temp/                          временные файлы задач, включая сценарии .feature (в git не хранится)
 └── skills-vendor/                 вендорские репозитории (в git не хранятся)
 ```
 
