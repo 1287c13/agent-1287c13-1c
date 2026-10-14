@@ -45,6 +45,14 @@ $env:CODE_INDEX_HOME = "C:\_works\1c-ai\agent\.cline\mcp\code-index-mcp\home"
 **`not_started` / `unknown_repo`** - каталог не попал в `daemon.toml`. Проверить
 секцию `[[paths]]` и выполнить `bsl-indexer.exe daemon reload`.
 
+**`serve` - это ещё не демон.** `bsl-indexer.exe serve` (его запускает Cline по stdio)
+читает индекс сам, а инструменты данных спрашивают демон (`http://127.0.0.1:8015`): без
+демона они отвечают `daemon_offline` либо `not_started`, хотя `get_stats` и `health`
+работают - они читают `.code-index\index.db` напрямую. После запуска демон сверяет время
+и размер файлов во всех отслеживаемых путях: `main` (124 954 файла) - 307 с, путь выгрузки
+ждал очереди и только затем пошёл в `initial_indexing`. Всё это время инструменты по
+выгрузке недоступны; ждать, а не переиндексировать.
+
 ### Живая база: порт 6003 не отвечает
 
 **Симптом:** инструменты `1c-toolkit` недоступны, `check-harness.ps1` пишет
@@ -61,6 +69,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-toolkit.ps1
 ```powershell
 Invoke-WebRequest http://127.0.0.1:6003/health -UseBasicParsing
 ```
+
+### Инструменты `1c-toolkit` не появились в сеансе
+
+**Симптом:** порт 6003 отвечает на `/health`, но инструментов `1c-toolkit` в сеансе нет -
+сервер `streamableHttp` подняли уже после старта VS Code.
+
+**Что делать:** перезапускать VS Code не обязательно, у обработки есть документированный
+REST API (`skills-vendor\1c-mcp-toolkit\README_FULL.md`, раздел «REST API»):
+`POST http://127.0.0.1:6003/api/execute_code` (тело `{"code": "..."}`, результат - в
+переменной `Результат`), `/api/execute_query`, `/api/get_object_by_link`,
+`/api/get_metadata`. Тело собирать `ConvertTo-Json` и отдавать как UTF-8, ответ читать
+тоже как UTF-8 (`RawContentStream`) - иначе кириллица приходит кракозябрами.
 
 ### Сервер справки не находит данные
 
