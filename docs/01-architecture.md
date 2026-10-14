@@ -83,7 +83,7 @@ Cline (VS Code)
 ├── .v8-project.json               базы и путь к платформе 1С
 ├── docs/                          описание решения; docs/legacy - документация первой версии
 ├── mcp/                           доки и пример конфигурации по MCP-серверам
-├── scripts/                       install / start / check / publish
+├── scripts/                       install / start / check / publish + start-toolkit / stop-toolkit / vanessa-run
 └── skills-vendor/                 вендорские репозитории (в git не хранятся)
 ```
 

@@ -18,6 +18,13 @@
     Automation: tools\onescript\run-behavior-check-session.os (функция
     ПолучитьСтрокуЗапускаСборки) и tools\JSON\VBParams*.json.
 
+    Обработку Vanessa скрипт разворачивает сам: если .vanessa\vanessa-automation-single.epf
+    нет, он достаёт epf из свежего релизного архива vanessa-automation-single*.zip
+    (каталог Загрузки или -VanessaZip). Отдельный шаг установки не нужен.
+
+    Прогон делается ПО ТРЕБОВАНИЮ ЗАДАЧИ и обязательной проверкой харнесса не
+    является: он нужен там, где в цели задачи есть прогон сценария в базе.
+
     Прогону нужен интерактивный рабочий стол: клиент тестирования - обычное окно
     1С, шаги выполняются в нём.
 
@@ -67,6 +74,19 @@
 .PARAMETER NoRun
     Только собрать VAParams.json и напечатать строку запуска.
 
+.PARAMETER FreeToolkit
+    Перед прогоном погасить сеанс 1C MCP Toolkit (scripts\stop-toolkit.ps1), а после
+    прогона поднять его обратно (scripts\start-toolkit.ps1). Нужно потому, что прогону
+    требуются два клиента той же базы, а занятый сеанс toolkit упирается в лицензию.
+    При -NoWait обратный подъём не выполняется - его делает start-toolkit.ps1.
+
+.PARAMETER ToolkitPort
+    Порт сеанса toolkit для -FreeToolkit (по умолчанию 6003).
+
+.PARAMETER VanessaZip
+    Релизный архив vanessa-automation-single*.zip для автоматического развёртывания
+    обработки. По умолчанию берётся самый свежий такой архив из каталога Загрузки.
+
 .EXAMPLE
     powershell -NoProfile -ExecutionPolicy Bypass -File scripts\vanessa-run.ps1
 
@@ -87,17 +107,40 @@ param(
     [string[]] $ExtraParams = @(),
     [int] $TimeoutSec = 1800,
     [switch] $NoWait,
-    [switch] $NoRun
+    [switch] $NoRun,
+    [switch] $FreeToolkit,
+    [int] $ToolkitPort = 6003,
+    [string] $VanessaZip = ''
 )
 
 $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 
-if ([string]::IsNullOrWhiteSpace($Root)) {
-    $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent (Resolve-Path -LiteralPath $PSCommandPath).Path }
-    $Root = Split-Path -Parent $scriptDir
-}
+# Каталог скриптов нужен и ниже - им находятся соседние скрипты toolkit.
+$scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent (Resolve-Path -LiteralPath $PSCommandPath).Path }
+if ([string]::IsNullOrWhiteSpace($Root)) { $Root = Split-Path -Parent $scriptDir }
 $projectRoot = $Root
+
+# Автоматическое развёртывание обработки Vanessa Automation. Vanessa ставится не в
+# конфигурацию базы, а запускается внешней обработкой - нужен только файл epf,
+# поэтому его достаточно достать из релизного архива.
+function Install-VanessaEpf([string] $Target, [string] $Zip) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    if ([string]::IsNullOrWhiteSpace($Zip)) {
+        $downloads = Join-Path $env:USERPROFILE 'Downloads'
+        $Zip = @(Get-ChildItem -LiteralPath $downloads -Filter 'vanessa-automation-single*.zip' -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName)[0]
+    }
+    if (-not $Zip -or -not (Test-Path -LiteralPath $Zip)) { return $null }
+    $archive = [System.IO.Compression.ZipFile]::OpenRead($Zip)
+    try {
+        $entry = @($archive.Entries | Where-Object { $_.Name -like '*.epf' } | Sort-Object Length -Descending)[0]
+        if (-not $entry) { return $null }
+        [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $Target, $true)
+        return ($entry.Name + ' из ' + $Zip)
+    }
+    finally { $archive.Dispose() }
+}
 
 # --- 1. База и платформа из .v8-project.json ---------------------------------
 $cfgPath = Join-Path $projectRoot '.v8-project.json'
@@ -131,7 +174,15 @@ $junitDir = Join-Path $runDir 'junit'
 
 if ([string]::IsNullOrWhiteSpace($Epf)) { $Epf = Join-Path $runDir 'vanessa-automation-single.epf' }
 if (-not (Test-Path -LiteralPath $Epf)) {
-    throw "Нет обработки Vanessa Automation: $Epf`nРазверните её: scripts\install-vanessa.ps1"
+    Write-Host "Обработка Vanessa не развёрнута - разворачиваю: $Epf" -ForegroundColor Yellow
+    $deployedFrom = Install-VanessaEpf -Target $Epf -Zip $VanessaZip
+    if (-not $deployedFrom) {
+        throw ("Нет обработки Vanessa Automation: $Epf`n" +
+               "Не найден релизный архив vanessa-automation-single*.zip (каталог Загрузки).`n" +
+               "Скачайте его: https://github.com/Pr-Mex/vanessa-automation/releases `n" +
+               "и повторите либо укажите архив явно: -VanessaZip <путь к zip>")
+    }
+    Write-Host "  развёрнуто: $deployedFrom" -ForegroundColor Green
 }
 if ([string]::IsNullOrWhiteSpace($Features)) { $Features = Join-Path $projectRoot 'features' }
 $Features = [System.IO.Path]::GetFullPath($Features)
@@ -175,6 +226,30 @@ $json = @"
 $utf8Bom = New-Object System.Text.UTF8Encoding($true)
 [System.IO.File]::WriteAllText($vaParams, $json, $utf8Bom)
 
+# --- 3a. Освобождение базы под прогон (по требованию: -FreeToolkit) ---------
+# Прогону нужны ДВА клиента одной базы: менеджер тестирования и клиент тестирования.
+# Сеанс toolkit - тоже клиент базы, поэтому его гасят до прогона и поднимают обратно
+# после, но только если он был поднят и только когда скрипт ждёт конца прогона.
+$toolkitScripts = @{
+    Stop  = Join-Path $scriptDir 'stop-toolkit.ps1'
+    Start = Join-Path $scriptDir 'start-toolkit.ps1'
+}
+$toolkitWasUp = $false
+if ($FreeToolkit) {
+    foreach ($s in $toolkitScripts.Values) { if (-not (Test-Path -LiteralPath $s)) { throw "Нет скрипта: $s" } }
+    try {
+        Invoke-WebRequest "http://127.0.0.1:$ToolkitPort/health" -UseBasicParsing -TimeoutSec 4 | Out-Null
+        $toolkitWasUp = $true
+    }
+    catch { }
+    if ($toolkitWasUp) {
+        Write-Host "Освобождаю базу: гашу сеанс toolkit на порту $ToolkitPort" -ForegroundColor Yellow
+        & $toolkitScripts.Stop -Port $ToolkitPort -TimeoutSec 60
+        if ($LASTEXITCODE -ne 0) { throw 'Сеанс toolkit закрыть не удалось - база занята, прогон отменён' }
+    }
+    else { Write-Host '[=] Сеанса toolkit нет - база свободна' }
+}
+
 # --- 4. Строка запуска -------------------------------------------------------
 $cParams = @('StartFeaturePlayer', "VAParams=$vaParams") + $ExtraParams
 $cmdLine = 'ENTERPRISE /F"' + $basePath + '" ' + $authParams + ' /Execute "' + $Epf + '" /C"' +
@@ -199,6 +274,7 @@ Write-Host "Сеанс запущен, PID $($proc.Id)"
 
 if ($NoWait) {
     Write-Host "Ждём завершения: .vanessa\status.txt (0 - успех, 1 - есть упавшие сценарии). Лог: .vanessa\va-log.txt, отчёт: .vanessa\junit\junit.xml"
+    if ($toolkitWasUp) { Write-Host "Сеанс toolkit погашен - поднять обратно: scripts\start-toolkit.ps1 -Port $ToolkitPort" -ForegroundColor Yellow }
     exit 0
 }
 
@@ -230,4 +306,11 @@ if (Test-Path -LiteralPath $logFile) {
 }
 else {
     Write-Host 'Текстовый лог выполнения не создан.' -ForegroundColor Yellow
+}
+
+# --- 6. Возврат сеанса toolkit ------------------------------------------------
+if ($toolkitWasUp) {
+    Write-Host ''
+    Write-Host 'Поднимаю сеанс toolkit обратно...' -ForegroundColor Cyan
+    & $toolkitScripts.Start -Root $projectRoot -Port $ToolkitPort -NoWait
 }

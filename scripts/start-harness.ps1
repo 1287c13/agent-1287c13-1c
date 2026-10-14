@@ -6,8 +6,13 @@
 .DESCRIPTION
   Поднимает то, что должно работать в фоне:
     - индексатор кода bsl-indexer daemon run;
-    - проверяет порт 6003 (встроенный сервер 1C MCP Toolkit - его поднимает сам пользователь в 1С);
+    - встроенный сервер 1C MCP Toolkit (порт 6003): если он не отвечает, вызывается
+      scripts\start-toolkit.ps1 - обработка поднимается автозапуском из базы проекта;
     - печатает короткий статус.
+
+.PARAMETER ToolkitDatabase
+  id (или alias, name) базы из .v8-project.json, в которой поднимать встроенный сервер
+  toolkit. По умолчанию - поле "default" конфига.
 
 .NOTES
   Скрипт нужен потому, что фон индексатора живёт до перезагрузки. Если нужно,
@@ -15,7 +20,8 @@
 #>
 [CmdletBinding()]
 param(
-    [string] $Root
+    [string] $Root,
+    [string] $ToolkitDatabase = ''
 )
 
 $ErrorActionPreference = 'Continue'
@@ -58,9 +64,18 @@ try {
     Write-Host '[=] 1c-toolkit (порт 6003) отвечает' -ForegroundColor Green
 }
 catch {
-    Write-Host '[!] 1c-toolkit не отвечает. Откройте в базе 1С:' -ForegroundColor Yellow
-    Write-Host "    $Root\.cline\mcp\1c-mcp-toolkit\MCP_Toolkit.epf" -ForegroundColor Yellow
-    Write-Host '    режим "Встроенный сервер" -> "Запустить сервер" (порт 6003)' -ForegroundColor Yellow
+    Write-Host '[*] 1c-toolkit не отвечает - поднимаю встроенный сервер автоматически...'
+    $startToolkit = Join-Path $Root 'scripts\start-toolkit.ps1'
+    if (Test-Path $startToolkit) {
+        if ([string]::IsNullOrWhiteSpace($ToolkitDatabase)) { & $startToolkit -Root $Root -TimeoutSec 60 }
+        else { & $startToolkit -Root $Root -DatabaseId $ToolkitDatabase -TimeoutSec 60 }
+        if ($LASTEXITCODE -eq 0) { Write-Host '[+] 1c-toolkit поднят (порт 6003)' -ForegroundColor Green }
+        else { Write-Host '[!] сервер не поднялся - разбор причин напечатан выше' -ForegroundColor Yellow }
+    }
+    else {
+        Write-Host "[!] Нет $startToolkit - откройте в базе 1С .cline\mcp\1c-mcp-toolkit\MCP_Toolkit.epf" -ForegroundColor Yellow
+        Write-Host '    и нажмите "Запустить сервер" (порт 6003)' -ForegroundColor Yellow
+    }
 }
 
 Write-Host ''

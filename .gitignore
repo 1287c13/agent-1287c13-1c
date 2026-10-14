@@ -28,6 +28,10 @@ venv/
 .cline/mcp/
 .cline/skills/
 
+# --- Vanessa Automation: локальный скрипт развёртывания обработки ---
+# прогон (scripts/vanessa-run.ps1) остаётся в git: это и есть тестовый прогон
+scripts/install-vanessa.ps1
+
 # --- IDE ---
 .idea/
 

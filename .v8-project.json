@@ -34,13 +34,6 @@
       "type": "file",
       "path": "C:\\Users\\art8k\\OneDrive\\Документы\\1C\\DemoERPUH",
       "aliases": ["erp", "ерп"]
-    },
-    {
-      "id": "demo-trd",
-      "name": "DemoTrd",
-      "type": "file",
-      "path": "C:\\Users\\art8k\\OneDrive\\Документы\\1C\\DemoTrd",
-      "aliases": ["trd", "упп"]
     }
   ]
 }

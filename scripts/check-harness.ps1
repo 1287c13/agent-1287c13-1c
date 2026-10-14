@@ -11,7 +11,7 @@
     - порт 6003 встроенного сервера 1C MCP Toolkit;
     - .v8-project.json и существование баз из него;
     - платформы 1С и наличие файлов справки shcntx_ru.hbk;
-    - прогон Gherkin/Vanessa: обработка, сценарии, VAParams;
+    - прогон Gherkin/Vanessa (по требованию задачи): обработка, сценарии, VAParams;
     - учётные данные баз (user/password) для подключения и прогона;
     - занятость клиентских сеансов 1С (лицензия на клиентов);
     - развёрнутость вендорских репозиториев (skills-vendor).
@@ -91,7 +91,7 @@ try {
     Ok "сервер отвечает ($($r.StatusCode))"
 }
 catch {
-    Warn 'порт 6003 не отвечает - откройте .cline\mcp\1c-mcp-toolkit\MCP_Toolkit.epf в базе 1С и запустите Встроенный сервер'
+    Warn 'порт 6003 не отвечает - поднимите сервер: scripts\start-toolkit.ps1 (или scripts\start-harness.ps1)'
 }
 
 # --- 5. Проект 1С -----------------------------------------------------------
@@ -121,18 +121,19 @@ if (Test-Path $skillsDir) {
 }
 else { Bad 'нет каталога .cline\skills - выполните scripts\install-vendor-skills.ps1' }
 
-# --- 7. Прогон Gherkin/Vanessa ----------------------------------------------
-Head 'Прогон Gherkin/Vanessa'
+# --- 7. Прогон Gherkin/Vanessa (по требованию задачи) ------------------------
+Head 'Прогон Gherkin/Vanessa (запускается только по требованию задачи)'
 $epf = Join-Path $Root '.vanessa\vanessa-automation-single.epf'
 if (Test-Path $epf) { Ok 'внешняя обработка развёрнута (.vanessa\vanessa-automation-single.epf)' }
-else { Warn 'нет .vanessa\vanessa-automation-single.epf - выполните scripts\install-vanessa.ps1' }
+else { Info 'нет .vanessa\vanessa-automation-single.epf - его развернёт сам scripts\vanessa-run.ps1' }
+Info 'сеанс toolkit под прогон освобождает и возвращает сам: scripts\vanessa-run.ps1 -FreeToolkit'
 $featuresDir = Join-Path $Root 'features'
 if (Test-Path $featuresDir) {
     $fCount = @(Get-ChildItem $featuresDir -Recurse -Filter *.feature -File -ErrorAction SilentlyContinue).Count
     if ($fCount -gt 0) { Ok "$fCount сценариев .feature в features\" }
-    else { Warn 'каталог features\ есть, но .feature в нём нет' }
+    else { Info 'каталог features\ есть, но .feature в нём нет' }
 }
-else { Warn 'нет каталога features\ - сюда кладутся сценарии для scripts\vanessa-run.ps1' }
+else { Info 'нет каталога features\ - сюда кладутся сценарии для scripts\vanessa-run.ps1' }
 if (Test-Path (Join-Path $Root '.vanessa\VAParams.json')) { Ok 'VAParams.json собран (остался от прошлого прогона)' }
 else { Info 'VAParams.json ещё не собран - его готовит scripts\vanessa-run.ps1 перед прогоном' }
 
