@@ -10,12 +10,13 @@
     Скрипт освобождает базу от этого сеанса.
 
     Порядок работы:
-      1. если /health не отвечает - гасить нечего;
+      1. если /health не отвечает и процессов 1С с обработкой toolkit нет - гасить нечего;
+         сеанс, который есть, но не отвечает (завис), виден по процессам и всё равно гасится;
       2. штатный путь: POST /api/close_1c_session - обработка закрывает свой сеанс 1С
          сама (документированный эндпоинт toolkit, он же инструмент close_1c_session);
       3. резервный путь (он же режим -Force): остановка процессов 1С, в командной
          строке которых есть MCP_Toolkit.epf;
-      4. результат - только когда /health перестал отвечать.
+      4. результат - только когда /health перестал отвечать и процессов не осталось.
 
 .PARAMETER Port
     Порт встроенного сервера (по умолчанию 6003).
@@ -73,13 +74,19 @@ function Wait-PortClosed([int] $p, [int] $seconds) {
     return $false
 }
 
-if (-not (Test-ToolkitHealth $Port)) {
-    Write-Host "[=] Порт $Port не отвечает - сеанса toolkit нет, гасить нечего"
+$sessions = @(Get-ToolkitSessions)
+$serveNow = Test-ToolkitHealth $Port
+
+# Гасить нечего только если и сервер молчит, и процессов с обработкой нет.
+# Сеанс, который есть, но на /health не отвечает (завис), надо уметь закрыть -
+# иначе следующий scripts\start-toolkit.ps1 упрётся в занятый порт/лицензию.
+if (-not $serveNow -and $sessions.Count -eq 0) {
+    Write-Host "[=] Порт $Port не отвечает и процессов 1С с обработкой toolkit нет - гасить нечего"
     exit 0
 }
 
-$sessions = @(Get-ToolkitSessions)
-Write-Host "Сеанс toolkit отвечает на http://127.0.0.1:$Port/health"
+if ($serveNow) { Write-Host "Сеанс toolkit отвечает на http://127.0.0.1:$Port/health" }
+else { Write-Host "Сеанс toolkit на /health не отвечает, но процессы 1С с обработкой есть - идёт резервный путь" -ForegroundColor Yellow }
 Write-Host ("Процессов 1С с обработкой toolkit: " + $sessions.Count)
 
 if ($NoRun) {
@@ -91,7 +98,7 @@ if ($NoRun) {
 }
 
 # --- 1. Штатный путь: обработка закрывает свой сеанс сама --------------------
-if (-not $Force) {
+if (-not $Force -and $serveNow) {
     Write-Host 'Штатный путь: POST /api/close_1c_session' -ForegroundColor Cyan
     try {
         $r = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/api/close_1c_session" -Method Post `
@@ -108,17 +115,23 @@ if (-not $Force) {
 
 # --- 2. Резервный путь: остановка процесса 1С с обработкой toolkit -----------
 Write-Host 'Резервный путь: остановка процессов 1С с обработкой MCP_Toolkit.epf' -ForegroundColor Cyan
-foreach ($s in @(Get-ToolkitSessions)) {
+$killSessions = @(Get-ToolkitSessions)
+if ($killSessions.Count -eq 0) { Write-Host '  процессов 1С с обработкой toolkit не найдено - останавливать нечего' -ForegroundColor Yellow }
+foreach ($s in $killSessions) {
     Stop-Process -Id $s.ProcessId -Force -ErrorAction SilentlyContinue
     Write-Host ("  остановлен PID " + $s.ProcessId)
 }
 
-if (Wait-PortClosed $Port $TimeoutSec) {
+$portClosed = Wait-PortClosed $Port $TimeoutSec
+$leftSessions = @(Get-ToolkitSessions)
+if ($portClosed -and $leftSessions.Count -eq 0) {
     Write-Host "[ok] Сеанс toolkit закрыт, порт $Port свободен" -ForegroundColor Green
     exit 0
 }
 
-Write-Host "[FAIL] Порт $Port всё ещё отвечает - сеанс закрыть не удалось." -ForegroundColor Red
+Write-Host "[FAIL] Сеанс toolkit закрыть не удалось." -ForegroundColor Red
+if (-not $portClosed) { Write-Host "       Порт $Port всё ещё отвечает." -ForegroundColor Yellow }
+foreach ($s in $leftSessions) { Write-Host ("       Остался процесс 1С PID " + $s.ProcessId) -ForegroundColor Yellow }
 Write-Host '       Что смотреть: нет ли второй обработки toolkit на том же порту;' -ForegroundColor Yellow
 Write-Host '                     закройте её окно 1С вручную.' -ForegroundColor Yellow
 exit 1

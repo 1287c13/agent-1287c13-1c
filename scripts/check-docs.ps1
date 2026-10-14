@@ -213,7 +213,7 @@ $pathRe = [regex]'`([A-Za-zА-Яа-яЁё0-9_\-\\/\.]+\.(?:ps1|md|json|epf|featu
 # Файлы вне репозитория: справка установленной платформы и содержимое чужих архивов.
 $externalLeaves = @('shcntx_ru.hbk', 'v8-project-guide.md', 'jsonparamsru.md', 'index.md', 'vbparams.json', 'run-behavior-check-session.os')
 # Рантайм: появляется после установки, в git не хранится.
-$runtimePrefixes = @('.cline\mcp', '.cline\skills', '.vanessa', '.code-index', 'dump', 'logs', 'cache', '.tmp', 'skills-vendor', 'docs\jsonparams')
+$runtimePrefixes = @('.cline\mcp', '.cline\skills', '.vanessa', '.code-index', 'dump', 'logs', 'cache', 'temp', 'skills-vendor', 'docs\jsonparams')
 # Имена, которые создаются рантаймом в любом месте (настройки обработки, метка версии).
 $runtimeLeaves = @('params.json', 'version.txt')
 # Индекс имён файлов проекта: некоторые ссылки называют только имя файла.
@@ -221,7 +221,7 @@ $runtimeLeaves = @('params.json', 'version.txt')
 # сначала полностью перечисляет их содержимое (в dump\ - свыше 127 тыс. файлов XML-выгрузки),
 # и проверка уходит за минуты, хотя эти файлы всё равно отбрасываются. Обход - свой стек
 # по EnumerateDirectories/EnumerateFiles с пропуском каталога целиком, не заходя в него.
-$skipDirs = @('.git', 'dump', 'cache', 'logs', '.tmp', '.code-index')
+$skipDirs = @('.git', 'dump', 'cache', 'logs', 'temp', '.code-index')
 $nameIndex = @{}
 $scanStack = New-Object System.Collections.Stack
 $scanStack.Push($Root)
@@ -330,7 +330,7 @@ $gitignore = Join-Path $Root '.gitignore'
 if (-not (Test-Path $gitignore)) { Bad 'нет .gitignore' }
 else {
     $gi = Get-Content $gitignore -Raw -Encoding UTF8
-    $required = @('.vanessa/', 'skills-vendor/', '.cline/mcp/', '.cline/skills/', 'dump/', '*.epf', '.code-index/', '.tmp/')
+    $required = @('.vanessa/', 'skills-vendor/', '.cline/mcp/', '.cline/skills/', 'dump/', '*.epf', '.code-index/', 'temp/')
     $missingRules = @()
     foreach ($r in $required) {
         if ($gi -notmatch ('(?m)^\s*' + [regex]::Escape($r) + '\s*$')) { $missingRules += $r }

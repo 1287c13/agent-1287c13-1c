@@ -5,7 +5,7 @@ dump/
 logs/
 cache/
 .code-index/
-.tmp/
+temp/
 
 # --- рантайм прогонов Vanessa Automation (epf, VAParams, логи, статус) ---
 .vanessa/

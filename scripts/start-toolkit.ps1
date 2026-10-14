@@ -11,11 +11,17 @@
     обработки из командной строки"), поэтому нажимать "Запустить сервер" на форме
     вручную не нужно.
 
-    Порядок работы:
+    Скрипт идемпотентен: он НЕ плодит клиентские сеансы. Порядок работы:
       1. разрешает базу по .v8-project.json (id / alias / name, по умолчанию - default);
-      2. если /health на порту уже отвечает - ничего не запускает;
-      3. запускает клиент 1С с обработкой и startup-параметрами;
-      4. ждёт ответа http://127.0.0.1:<порт>/health и печатает итог.
+      2. если /health на порту отвечает - не запускает ничего (сервер уже поднят);
+      3. если сеанс 1С с обработкой toolkit уже запущен, но сервер ещё не ответил -
+         второй сеанс не поднимается: скрипт ждёт готовности уже запущенного;
+      4. только если нет ни сервера, ни сеанса - запускает клиент 1С с обработкой
+         и startup-параметрами;
+      5. ждёт ответа http://127.0.0.1:<порт>/health и печатает итог.
+
+    Запуск второго сеанса - только явным ключом -Force: он сначала гасит уже
+    запущенный сеанс (scripts\stop-toolkit.ps1) и лишь затем поднимает новый.
 
     Сеанс 1С остаётся открытым - сервер живёт в нём. Закрыть: scripts\stop-toolkit.ps1.
     Сеанс занимает клиентскую лицензию базы, поэтому перед прогоном Vanessa
@@ -47,10 +53,12 @@
     Сколько секунд ждать ответа /health после запуска (по умолчанию 90).
 
 .PARAMETER Force
-    Запустить сеанс, даже если порт уже отвечает.
+    Перезапуск: погасить уже запущенный сеанс toolkit (scripts\stop-toolkit.ps1) и
+    поднять новый. Без этого ключа второй сеанс не поднимается: если сервер отвечает -
+    скрипт выходит, если сеанс есть, но сервер молчит - скрипт только ждёт.
 
 .PARAMETER NoWait
-    Не ждать /health: запустить сеанс, напечатать PID и выйти.
+    Не ждать /health: запустить сеанс (если его ещё нет), напечатать PID и выйти.
 
 .PARAMETER NoRun
     Только разрешить базу и напечатать команду запуска - ничего не запускать.
@@ -78,8 +86,8 @@ param(
 $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 
+$scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent (Resolve-Path -LiteralPath $PSCommandPath).Path }
 if ([string]::IsNullOrWhiteSpace($Root)) {
-    $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent (Resolve-Path -LiteralPath $PSCommandPath).Path }
     $Root = Split-Path -Parent $scriptDir
 }
 
@@ -89,6 +97,14 @@ function Test-ToolkitHealth([int] $p) {
         return ($r.StatusCode -eq 200)
     }
     catch { return $false }
+}
+
+# Сеансы 1С, в командной строке которых есть обработка toolkit. Результат идёт через
+# конвейер: одиночный процесс разворачивается в скаляр, а у скаляра нет .Count,
+# поэтому вызывающий оборачивает вызов в @(...).
+function Get-ToolkitSessions {
+    @(Get-CimInstance Win32_Process -Filter "Name='1cv8.exe' or Name='1cv8c.exe' or Name='1cv8s.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and ($_.CommandLine -like '*MCP_Toolkit*') })
 }
 
 # --- 1. База и платформа из .v8-project.json ---------------------------------
@@ -129,9 +145,52 @@ if (-not (Test-Path -LiteralPath $Epf)) {
 }
 
 # --- 2. Может, сервер уже поднят? --------------------------------------------
-if (-not $Force -and (Test-ToolkitHealth $Port)) {
-    Write-Host "[=] Сервер уже отвечает: http://127.0.0.1:$Port/health (перезапуск - с ключом -Force)"
+# Главное правило: клиентский сеанс 1С не плодится. Порядок проверок -
+# сначала живой сервер, затем уже запущенный сеанс, и только потом запуск.
+$sessions = @(Get-ToolkitSessions)
+$serveNow = Test-ToolkitHealth $Port
+
+if ($Force -and ($serveNow -or $sessions.Count -gt 0)) {
+    Write-Host '[*] -Force: гашу уже запущенный сеанс toolkit перед новым запуском...' -ForegroundColor Yellow
+    $stopScript = Join-Path $scriptDir 'stop-toolkit.ps1'
+    if (-not (Test-Path -LiteralPath $stopScript)) { throw "Нет скрипта остановки: $stopScript" }
+    & $stopScript -Port $Port -TimeoutSec 60 | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw 'Сеанс toolkit закрыть не удалось - подъём нового отменён' }
+    $sessions = @(Get-ToolkitSessions)
+    $serveNow = $false
+}
+
+if (-not $Force -and $serveNow) {
+    if ($sessions.Count -gt 0) {
+        $pids = ($sessions | ForEach-Object { [string] $_.ProcessId }) -join ', '
+        Write-Host "[=] Сервер уже поднят: http://127.0.0.1:$Port/health (сеанс 1С PID $pids)" -ForegroundColor Green
+    }
+    else { Write-Host "[=] Сервер уже поднят: http://127.0.0.1:$Port/health" -ForegroundColor Green }
+    Write-Host '    Новый сеанс не запускаю. Перезапуск - с ключом -Force.'
     exit 0
+}
+
+# Сеанс уже запущен, но сервер ещё не ответил: второй сеанс не поднимается - ждём этот.
+if (-not $Force -and $sessions.Count -gt 0) {
+    $pids = ($sessions | ForEach-Object { [string] $_.ProcessId }) -join ', '
+    Write-Host "[=] Сеанс toolkit уже запущен (PID $pids), но http://127.0.0.1:$Port/health пока не отвечает." -ForegroundColor Yellow
+    Write-Host '    Второй сеанс не поднимаю - жду готовности уже запущенного.' -ForegroundColor Yellow
+    if ($NoWait) { exit 0 }
+    $elapsed = 0
+    while ($elapsed -lt $TimeoutSec) {
+        Start-Sleep -Seconds 3
+        $elapsed += 3
+        if (Test-ToolkitHealth $Port) {
+            Write-Host "[ok] Сервер поднялся в уже запущенном сеансе: http://127.0.0.1:$Port/health (PID $pids)" -ForegroundColor Green
+            exit 0
+        }
+        Write-Host "  ... $elapsed с, сервер ещё не ответил" -ForegroundColor DarkGray
+    }
+    Write-Host "[FAIL] Сеанс toolkit есть (PID $pids), но сервер не ответил за $TimeoutSec с." -ForegroundColor Red
+    Write-Host '       Что смотреть: 1) окно 1С с обработкой - нет ли в нём диалога (например, вход);' -ForegroundColor Yellow
+    Write-Host '                     2) не занята ли клиентская лицензия базы чужими сеансами 1С.' -ForegroundColor Yellow
+    Write-Host '       Перезапуск сеанса: этот же скрипт с ключом -Force.' -ForegroundColor Yellow
+    exit 1
 }
 
 # --- 3. Параметры автозапуска ------------------------------------------------

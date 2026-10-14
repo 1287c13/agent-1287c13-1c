@@ -135,7 +135,11 @@ File="C:\Users\art8k\OneDrive\Документы\1C\DemoARAutomation20",
 - **знание, не перенесённое в правила**: найденное ограничение не описано в
   `.clinerules/40-lessons.md` или `docs/06-troubleshooting.md`;
 - **задача по харнессу решена без проверки**: не прогнаны `scripts\check-harness.ps1`
-  и `scripts\check-docs.ps1` до и после правки.
+  и `scripts\check-docs.ps1` до и после правки;
+- **временные файлы вне `temp\`**: разовые скрипты, логи, выгрузки ответов и черновики по
+  задаче хранятся только в `temp\` (каталог в `.gitignore`);
+- **повторный подъём живого слоя**: `scripts\start-toolkit.ps1` не запускает второй клиент,
+  если сервер уже отвечает или сеанс с обработкой уже есть; повторный запуск - только `-Force`.
 
 ---
 
@@ -153,6 +157,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-docs.ps1
 
 Живой слой (MCP `1c-toolkit`) поднимается скриптом: `scripts\start-toolkit.ps1` открывает
 обработку в базе из `.v8-project.json` и включает встроенный сервер (гасится
-`scripts\stop-toolkit.ps1`). Он же поднимается ежедневным `scripts\start-harness.ps1`.
+`scripts\stop-toolkit.ps1`). Скрипт идемпотентен: если `/health` уже отвечает или сеанс 1С
+с обработкой запущен, второй клиент не поднимается. Ежедневный запуск - `scripts\start-harness.ps1`.
+Временные файлы задач - только в `temp\`.
 
 Если что-то не так - [README.md](README.md), раздел «Установка».

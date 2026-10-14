@@ -79,6 +79,26 @@ if (Test-Path $indexer) {
     if ($st -match 'ready|индекс|daemon|ok|running|файл') { Ok 'индексатор отвечает' } else { Warn 'индексатор не отвечает - запустите scripts\start-harness.ps1' }
     if (Test-Path (Join-Path $indexHome 'daemon.toml')) { Ok 'daemon.toml на месте' } else { Bad 'нет daemon.toml - выполните enable-mcp.ps1' }
     if (Test-Path (Join-Path $Root '.code-index\index.db')) { Ok 'индекс построен (.code-index\index.db)' } else { Warn 'индекс ещё не построен (идёт первичная индексация?)' }
+
+    # Репозитории индекса: список - из daemon.toml, состояния - из /health демона (8015).
+    # Это дешёвая замена MCP-вызову get_stats: около 0,05 с против ~9 с на репозиторий.
+    # Ради этой строки агент больше не вызывает get_stats ради «какие репо есть».
+    $daemonCfg = Join-Path $indexHome 'daemon.toml'
+    if (Test-Path $daemonCfg) {
+        $aliases = @(Select-String -Path $daemonCfg -Pattern '^\s*alias\s*=\s*"([^"]+)"' -Encoding UTF8 | ForEach-Object { $_.Matches[0].Groups[1].Value })
+        if ($aliases.Count -gt 0) { Info ('репозитории индекса (daemon.toml): ' + ($aliases -join ', ')) }
+        else { Warn 'в daemon.toml не разобрано ни одной секции [[paths]] с alias' }
+    }
+    try {
+        $hRaw = Invoke-WebRequest -Uri 'http://127.0.0.1:8015/health' -UseBasicParsing -TimeoutSec 5
+        $hText = [System.Text.Encoding]::UTF8.GetString($hRaw.RawContentStream.ToArray())
+        $h = $hText | ConvertFrom-Json
+        $states = @($h.paths | ForEach-Object { (Split-Path -Leaf $_.path) + ' = ' + $_.status })
+        Ok ('демон индекса: ' + ($states -join '; '))
+        $notReady = @($h.paths | Where-Object { $_.status -ne 'ready' })
+        if ($notReady.Count -gt 0) { Info 'путь не в ready - идёт индексация: инструменты по нему недоступны, надо ждать' }
+    }
+    catch { Warn 'демон индекса (8015) не отвечает - запустите scripts\start-harness.ps1' }
 }
 else {
     Bad 'индексатор не установлен - выполните scripts\install-mcp.ps1'
@@ -91,7 +111,15 @@ try {
     Ok "сервер отвечает ($($r.StatusCode))"
 }
 catch {
-    Warn 'порт 6003 не отвечает - поднимите сервер: scripts\start-toolkit.ps1 (или scripts\start-harness.ps1)'
+    # Сеанс уже запущен, но сервер ещё не ответил: это не повод поднимать второй сеанс
+    # (лицензия на клиентов базы ограничена, порт 6003 занят).
+    $tk = @(Get-CimInstance Win32_Process -Filter "Name='1cv8.exe' or Name='1cv8c.exe' or Name='1cv8s.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and ($_.CommandLine -like '*MCP_Toolkit*') })
+    if ($tk.Count -gt 0) {
+        $tkPids = ($tk | ForEach-Object { [string] $_.ProcessId }) -join ', '
+        Warn "порт 6003 не отвечает, но сеанс toolkit уже запущен (PID $tkPids) - второй сеанс не поднимать: scripts\start-toolkit.ps1 ждёт готовности этого"
+    }
+    else { Warn 'порт 6003 не отвечает - поднимите сервер: scripts\start-toolkit.ps1 (или scripts\start-harness.ps1)' }
 }
 
 # --- 5. Проект 1С -----------------------------------------------------------
@@ -163,7 +191,14 @@ $procs = @(Get-Process -Name '1cv8', '1cv8c', '1cv8s' -ErrorAction SilentlyConti
 if ($procs.Count -eq 0) { Ok 'процессов 1С не запущено - базы свободны для прогона' }
 else { Warn "процессов 1С: $($procs.Count) - прогону Vanessa нужны ДВА клиента одной базы; закройте чужие сеансы, включая 1C MCP Toolkit (порт 6003)" }
 
-# --- 10. Вендорские репозитории ---------------------------------------------
+# --- 10. Временные файлы задачи ----------------------------------------------
+Head 'Временные файлы (temp)'
+$tempDir = Join-Path $Root 'temp'
+if (Test-Path $tempDir) { Ok 'каталог temp на месте - единственное место временных файлов задачи' }
+else { Warn 'нет каталога temp - создайте его: временные файлы задачи (разовые скрипты, логи, черновики) хранятся только здесь' }
+if (Test-Path (Join-Path $Root '.tmp')) { Warn 'остался старый каталог .tmp - временные файлы должны лежать в temp\, каталог .tmp удалите' }
+
+# --- 11. Вендорские репозитории ---------------------------------------------
 Head 'Вендорские репозитории (skills-vendor)'
 $vendorDir = Join-Path $Root 'skills-vendor'
 $vendorRepos = @('cc-1c-skills', 'cursor-1c-skills', 'mcp-bsl-platform-help-context', 'Vanessa_for_AI', 'va-ai-autotests', 'product-analyst', '1c-mcp-toolkit')

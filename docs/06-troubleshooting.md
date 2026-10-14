@@ -45,6 +45,12 @@ $env:CODE_INDEX_HOME = "C:\_works\1c-ai\agent\.cline\mcp\code-index-mcp\home"
 **`not_started` / `unknown_repo`** - каталог не попал в `daemon.toml`. Проверить
 секцию `[[paths]]` и выполнить `bsl-indexer.exe daemon reload`.
 
+**Чем не проверять живость.** `get_stats` - не признак живого демона: он читает
+`.code-index\index.db` напрямую и считает статистику около 9 с на репозиторий (а без
+параметра `repo` - по всем репозиториям сразу). Список репозиториев и их состояния
+показывает `scripts\check-harness.ps1`: алиасы - из `daemon.toml`, статусы - из
+`GET http://127.0.0.1:8015/health` (0,05 с).
+
 **`serve` - это ещё не демон.** `bsl-indexer.exe serve` (его запускает Cline по stdio)
 читает индекс сам, а инструменты данных спрашивают демон (`http://127.0.0.1:8015`): без
 демона они отвечают `daemon_offline` либо `not_started`, хотя `get_stats` и `health`
@@ -69,6 +75,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-toolkit.ps1
 ```powershell
 Invoke-WebRequest http://127.0.0.1:6003/health -UseBasicParsing
 ```
+
+Второй сеанс скрипт не поднимает: если сеанс 1С с обработкой уже запущен, а `/health`
+молчит, он ждёт готовности этого сеанса и пишет PID. Перезапуск такого сеанса -
+`scripts\start-toolkit.ps1 -Force` (скрипт сначала гасит старый сеанс). Если ждать нечего
+и сервер не поднимается, смотреть окно 1С: диалог входа, чужие клиентские сеансы базы
+(лицензия на клиентов), вторая обработка на том же порту.
 
 ### Инструменты `1c-toolkit` не появились в сеансе
 

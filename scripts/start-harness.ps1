@@ -41,16 +41,20 @@ if (-not (Test-Path $indexer)) {
 }
 
 $env:CODE_INDEX_HOME = $indexHome
-$running = @(Get-Process -Name 'bsl-indexer' -ErrorAction SilentlyContinue).Count -gt 0
 
-if ($running) {
-    Write-Host '[=] индексатор уже работает' -ForegroundColor Green
+# "Работает" - это процесс именно демона (daemon run), а не любой bsl-indexer.exe:
+# процесс serve Cline поднимает по stdio сам, и по нему остановленный демон выглядит живым.
+$daemonProcs = @(Get-CimInstance Win32_Process -Filter "Name='bsl-indexer.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -and ($_.CommandLine -match 'daemon\s+run') })
+
+if ($daemonProcs.Count -gt 0) {
+    Write-Host '[=] демон индексатора уже работает' -ForegroundColor Green
 }
 else {
-    Write-Host '[*] запускаю индексатор...'
+    Write-Host '[*] запускаю демон индексатора...'
     Start-Process -FilePath $indexer -ArgumentList @('daemon', 'run') -WorkingDirectory $indexHome -WindowStyle Hidden | Out-Null
     Start-Sleep -Seconds 3
-    Write-Host '[+] индексатор запущен' -ForegroundColor Green
+    Write-Host '[+] демон индексатора запущен' -ForegroundColor Green
 }
 
 $prevEap = $ErrorActionPreference
