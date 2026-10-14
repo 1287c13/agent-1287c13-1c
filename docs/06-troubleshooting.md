@@ -217,6 +217,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-vendor-ski
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-vendor-skills.ps1
 ```
 
+### Любой `.ps1` с корнем из `$PSScriptRoot` в блоке `param` падает так же
+
+**Причина:** в PowerShell 5.1 в блоке `param()` переменная `$PSScriptRoot` ещё не заполнена,
+поэтому значение по умолчанию обращается к пустой строке - даже при запуске через `-File`.
+Второй источник того же отказа рядом: `.ps1` с кириллицей **без BOM** разбирается как ANSI и
+ломается на этом же месте.
+
+**Лечение:** корень скрипта считать в теле, а не в `param`: `param([string] $Root = '')`, ниже
+`if (-not $Root) { $Root = Split-Path -Parent $PSScriptRoot }`. Так сделано в
+`scripts\check-context.ps1`. После правки - `scripts\fix-encoding.ps1`, а прогон - отдельной
+командой: команды одной пачки агента выполняются параллельно и читают файл до записи BOM.
+
 ### «Не удается загрузить файл ... не имеет цифровой подписи»
 
 **Причина:** политика выполнения PowerShell запрещает скрипты.
