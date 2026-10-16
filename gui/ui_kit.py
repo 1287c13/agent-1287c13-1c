@@ -41,6 +41,12 @@ INFO_INK = '#175cd3'
 FAMILY = 'Segoe UI'
 MONO = 'Consolas'
 
+# Действия с буфером обмена по аппаратному коду клавиши (event.keycode - код Windows,
+# он не зависит от раскладки). Tk обрабатывает Ctrl+C сам только при латинской раскладке:
+# при русской клавиша даёт keysym Cyrillic_es, и виртуальное событие <<Copy>> не приходит.
+CLIPBOARD_KEYS = {65: 'select_all', 67: 'copy', 86: 'paste', 88: 'cut', 89: 'redo', 90: 'undo'}
+LATIN_KEYSYMS = ('a', 'c', 'v', 'x', 'y', 'z', 'A', 'C', 'V', 'X', 'Y', 'Z')
+
 
 def font(size=10, weight='normal'):
     """Шрифт интерфейса: один семейный ряд на всё окно."""
@@ -70,6 +76,83 @@ def rounded_rect(canvas, x1, y1, x2, y2, radius, **kwargs):
         x1, y2, x1, y2 - radius, x1, y1 + radius, x1, y1,
     ]
     return canvas.create_polygon(points, smooth=True, **kwargs)
+
+
+# --- буфер обмена -----------------------------------------------------------------
+
+def selection_text(widget):
+    """Выделенный текст поля: у Text это диапазон sel, у Entry - selection."""
+    try:
+        if isinstance(widget, tk.Text):
+            return widget.get('sel.first', 'sel.last') if widget.tag_ranges('sel') else ''
+        return widget.selection_get() if widget.selection_present() else ''
+    except tk.TclError:
+        return ''
+
+
+def drop_selection(widget):
+    """Убрать выделение - для вырезания и вставки поверх выделенного."""
+    try:
+        if isinstance(widget, tk.Text):
+            if widget.tag_ranges('sel'):
+                widget.delete('sel.first', 'sel.last')
+        elif widget.selection_present():
+            widget.delete('sel.first', 'sel.last')
+    except tk.TclError:
+        pass
+
+
+def clipboard_action(widget, action):
+    """Выполнить действие с буфером обмена. Пустой буфер - не ошибка интерфейса."""
+    try:
+        if action in ('copy', 'cut'):
+            text = selection_text(widget)
+            if text:
+                widget.clipboard_clear()
+                widget.clipboard_append(text)
+                if action == 'cut':
+                    drop_selection(widget)
+            return
+        if action == 'paste':
+            if str(widget.cget('state')) == 'disabled':
+                return
+            data = widget.clipboard_get()
+            if data:
+                drop_selection(widget)
+                widget.insert('insert', data)
+            return
+        if action == 'select_all':
+            if isinstance(widget, tk.Text):
+                widget.tag_add('sel', '1.0', 'end-1c')
+                widget.mark_set('insert', '1.0')
+            else:
+                widget.selection_range(0, 'end')
+    except tk.TclError:
+        pass
+
+
+def control_action(keysym, keycode):
+    """Действие для Ctrl+<клавиша> или None, если сочетание не наше.
+
+    Разбор идёт по коду клавиши, а не по keysym: при русской раскладке Ctrl+C даёт
+    keysym Cyrillic_es, и сочетание не опознаётся. Латинские keysym не перехватываются -
+    их обрабатывает сам Tk, иначе действие выполнялось бы дважды.
+    """
+    if keysym in LATIN_KEYSYMS:
+        return None
+    return CLIPBOARD_KEYS.get(keycode)
+
+
+def bind_clipboard(widget):
+    """Ctrl+A/C/V/X на поле: работает и при русской раскладке."""
+    def on_control(event):
+        action = control_action(event.keysym, event.keycode)
+        if not action:
+            return None
+        clipboard_action(widget, action)
+        return 'break'
+
+    widget.bind('<Control-KeyPress>', on_control, add='+')
 
 
 class Card(tk.Frame):
@@ -261,6 +344,7 @@ class Input(tk.Frame):
         if width:
             self.entry.configure(width=width)
         self.entry.pack(fill='x', padx=10, pady=7)
+        bind_clipboard(self.entry)
         self.entry.bind('<FocusIn>', lambda _event: self.configure(highlightbackground=ACCENT))
         self.entry.bind('<FocusOut>', lambda _event: self.configure(highlightbackground=BORDER_STRONG))
         self.bind('<Button-1>', lambda _event: self.entry.focus_set())
@@ -291,6 +375,7 @@ class TextArea(tk.Frame):
                                 command=self.text.yview)
             bar.pack(side='right', fill='y', padx=(0, 4), pady=6)
             self.text.configure(yscrollcommand=bar.set)
+        bind_clipboard(self.text)
         self.text.bind('<FocusIn>', lambda _event: self.configure(highlightbackground=ACCENT))
         self.text.bind('<FocusOut>', lambda _event: self.configure(highlightbackground=BORDER_STRONG))
         if read_only:
@@ -304,6 +389,7 @@ class TextArea(tk.Frame):
         self.text.configure(state='normal')
         self.text.delete('1.0', 'end')
         self.text.insert('1.0', value or '')
+        self.text.see('1.0')
         self.text.configure(state='disabled' if read_only else 'normal')
 
     def clear(self):
@@ -400,9 +486,14 @@ def setup_theme(root):
     style.map('Modern.Treeview.Heading', background=[('active', CARD_ALT)])
     style.layout('Modern.Treeview', [('Modern.Treeview.treearea', {'sticky': 'nswe'})])
 
-    style.configure('Slim.Vertical.TScrollbar', background=BORDER_STRONG, troughcolor=CARD,
-                    bordercolor=CARD, lightcolor=BORDER_STRONG, darkcolor=BORDER_STRONG,
-                    arrowcolor=CARD, relief='flat', arrowsize=1, width=10)
+    # Полоса прокрутки: у неё должен быть видный и подвижный ползунок. Стрелки убраны
+    # (slim), а ползунок тёмный - на светлом фоне он иначе не отличается от желоба,
+    # и поле выглядит как поле без прокрутки.
+    style.configure('Slim.Vertical.TScrollbar', background='#98a2b3', troughcolor=CARD,
+                    bordercolor=CARD, lightcolor='#98a2b3', darkcolor='#98a2b3',
+                    arrowcolor=CARD, relief='flat', arrowsize=1, width=12)
+    style.map('Slim.Vertical.TScrollbar',
+              background=[('pressed', ACCENT), ('active', MUTED)])
     style.layout('Slim.Vertical.TScrollbar', [
         ('Vertical.Scrollbar.trough', {
             'children': [('Vertical.Scrollbar.thumb', {'expand': '1', 'sticky': 'nswe'})],

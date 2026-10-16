@@ -6,23 +6,31 @@
 протокола у окна нет: оно отправитель и читатель очереди, задача всё равно проходит
 через integration\\task.py, поэтому три отправителя (окно, HTTP, файл) дают один текст.
 
-Режим задачи окно не спрашивает - он выводится из роли: «инженер харнесса» означает
-задачу по самому харнессу (слот базы не нужен), любая другая роль - задачу по базе
-(слот базы обязателен). Ролей и баз может быть много: список баз окно берёт из
-.v8-project.json, поэтому выдуманную базу отправить не даст.
+Роли в окне - те, что названы в контракте как рабочие: программист 1С, аналитик,
+тестировщик, администратор. Задачи по самому инструменту агента («инженер харнесса»)
+окно не ставит: инструмент агента меняет сам агент из командной строки харнесса, и
+integration\\task.py отклоняет такую задачу от отправителя gui или http. Поэтому режим
+задачи у окна всегда один - по базе, и слот базы обязателен: список баз берётся из
+.v8-project.json, выдуманную базу окно отправить не даст.
 
 Куда отправлять (в очередь рядом или на HTTP-сервер) и адрес сервера - технические
-настройки, а не часть задачи: они живут в отдельном окне «Настройки и журнал».
-В режиме сервера окно читает результат по HTTP (GET /api/result/<id>), в режиме
-очереди - из queue\\outbox. Формулировку контракта и ход доставки показывает окно
-подробностей задачи (двойной щелчок по строке): в форме её показывать не нужно.
+настройки, а не часть задачи: они живут в отдельном окне «Настройки и журнал». Кнопки
+watcher-а там же и показываются только в режиме очереди рядом: если очередь разбирает
+сервер, поднимать локальный watcher нечего - по HTTP видно только его состояние.
+В режиме сервера окно читает результат по HTTP (GET /api/result/<id>) и ответ файлом
+(GET /api/answer/<id>), в режиме очереди - из queue\\outbox и queue\\answers.
+
+Ответ агента - markdown (queue\\answers\\answer_<id>.md): он читается человеком. Кнопка
+«Скачать ответ (HTML)» превращает его в страницу того же содержимого
+(integration\\md_to_html.py) - хранить HTML не нужно, он собирается при скачивании.
 
 Запуск:
 
     py -3 gui\\AgentGUI.py            (или deploy\\run-gui.bat)
 
-Внешний вид собирается из виджетов gui\\ui_kit.py: палитра, карточки, кнопки и
-скругления заданы там, зависимостей кроме tkinter нет.
+Внешний вид собирается из виджетов gui\\ui_kit.py: палитра, карточки, кнопки,
+скругления и буфер обмена (Ctrl+A/C/V/X работает и при русской раскладке) заданы там,
+зависимостей кроме tkinter нет.
 """
 
 import argparse
@@ -37,6 +45,7 @@ import urllib.request
 from time import strftime
 
 import tkinter as tk
+from tkinter import filedialog
 from tkinter import ttk
 
 import ui_kit as ui
@@ -50,11 +59,22 @@ _INTEGRATION = os.path.join(_ROOT, 'integration')
 if _INTEGRATION not in sys.path:
     sys.path.insert(0, _INTEGRATION)
 
-from task import build_prompt, database_labels, errors_to_text, make_task, validate_task  # noqa: E402
+import md_to_html  # noqa: E402
+from task import build_prompt, database_choices, errors_to_text, make_task, validate_task  # noqa: E402
 from transport.store import QueueStore, setup_stdio  # noqa: E402
 
-ROLES = ('программист 1С', 'тестировщик 1С', 'аналитик', 'администратор', 'инженер харнесса')
-HARNESS_ROLE = 'инженер харнесса'
+# Роли окна: те же имена, что названы в README и START.md как рабочие. Задача по
+# инструменту агента («инженер харнесса») из окна не ставится: её принимает только
+# командная строка харнесса (integration\\task.py, HARNESS_SOURCES).
+ROLES = ('программист 1С', 'аналитик', 'тестировщик', 'администратор')
+MODE = 'db'
+# Что роль значит для агента: приоритетный слой, а не набор скиллов (README, формат задачи).
+ROLES_HINTS = {
+    'программист 1С': 'приоритетный слой: индекс кода и скиллы сборки объекта; проверка - валидатор и загрузка',
+    'аналитик': 'приоритетный слой: живая база и индекс кода; разбор сохраняется файлом в analysis\\',
+    'тестировщик': 'приоритетный слой: Gherkin/Vanessa и живая база; прогон - если он в цели задачи',
+    'администратор': 'приоритетный слой: скиллы db-* и web-*: создать, выгрузить, загрузить, опубликовать базу',
+}
 STATE_FILE = 'gui_state.json'
 POLL_MS = 2000
 HTTP_TIMEOUT = 8
@@ -102,8 +122,11 @@ class AgentGUI(object):
         self.state_path = os.path.join(self.store.base, STATE_FILE)
         self.state = self._load_state()
 
-        self.role = tk.StringVar(value=self.state.get('role') or ROLES[0])
+        # Роль из прошлого запуска могла быть «инженер харнесса»: в окне такой роли нет.
+        saved_role = (self.state.get('role') or '').strip()
+        self.role = tk.StringVar(value=saved_role if saved_role in ROLES else ROLES[0])
         self.db = tk.StringVar(value=self.state.get('db') or '')
+        self.db_choices = []
         self.delivery = tk.StringVar(value=self.state.get('send') or 'queue')
         self.server = tk.StringVar(value=self.state.get('server') or 'http://127.0.0.1:8760')
         self.token = tk.StringVar(value=self.state.get('token') or '')
@@ -134,6 +157,7 @@ class AgentGUI(object):
         self._build_queue(content)
         self._build_footer()
 
+        self._sync_mode_controls()
         self._refresh_db_list()
         self._on_role_change()
         self.root.protocol('WM_DELETE_WINDOW', self.close)
@@ -189,11 +213,13 @@ class AgentGUI(object):
         tools.grid(row=0, column=1, sticky='e')
         self.watcher_chip = Chip(tools, 'watcher: проверяю', 'muted', bg_parent=ui.APP_BG)
         self.watcher_chip.pack(side='left', padx=(0, 12))
-        self.watcher_button = Button(tools, 'Поднять watcher', kind='secondary', height=34,
-                                     bg_parent=ui.APP_BG, command=self.start_watcher)
-        self.watcher_button.pack(side='left', padx=(0, 8))
         Button(tools, 'Настройки и журнал', kind='secondary', height=34, bg_parent=ui.APP_BG,
                command=self.open_settings).pack(side='left')
+        # Кнопку watcher-а показывает _sync_mode_controls: она нужна только там, где
+        # очередь рядом, и стоит последней, чтобы её можно было убрать без перестановки.
+        self.watcher_button = Button(tools, 'Поднять watcher', kind='secondary', height=34,
+                                     bg_parent=ui.APP_BG, command=self.start_watcher)
+        self._packedwatcher_button = False
 
     def _build_footer(self):
         foot = tk.Frame(self.root, bg=ui.APP_BG)
@@ -207,22 +233,58 @@ class AgentGUI(object):
         Button(foot, 'Обновить', kind='ghost', height=26, size=9, bg_parent=ui.APP_BG,
                command=self.refresh).pack(side='right')
 
+    # --- что показывать в выбранном режиме -----------------------------------
+
+    def _sync_mode_controls(self):
+        """Показать то, что имеет смысл в выбранном режиме.
+
+        В режиме сервера разбор очереди и доставку выполняет сервер: и поднимать
+        локальный watcher, и повторять доставку из окна нечего - кнопки, которые ничего
+        не меняют, только путают. Состояние очереди на сервере видно в пилюле шапки и в
+        окне настроек (GET /api/health).
+        """
+        local = self.delivery.get() != 'http'
+        pairs = ((self.watcher_button, '_packedwatcher_button', None),
+                 (getattr(self, 'redeliver_button', None), '_packedredeliver_button',
+                  getattr(self, 'copy_button', None)))
+        for widget, flag, before in pairs:
+            if widget is None:
+                continue
+            packed = getattr(self, flag, False)
+            if local and not packed:
+                widget.pack(side='left', padx=(8, 0), **({'before': before} if before else {}))
+                setattr(self, flag, True)
+            elif not local and packed:
+                widget.pack_forget()
+                setattr(self, flag, False)
+        if hasattr(self, 'watch_card'):
+            self._sync_settings_cards()
+
+    def _sync_settings_cards(self):
+        """В окне настроек видна карточка состояния той очереди, которая работает."""
+        local = self.delivery.get() != 'http'
+        wanted = self.watch_card if local else self.server_watch_card
+        other = self.server_watch_card if local else self.watch_card
+        other.pack_forget()
+        if not wanted.winfo_ismapped():
+            wanted.pack(fill='x', pady=(16, 0))
+
     # --- форма задачи --------------------------------------------------------
 
     def _build_form(self, parent):
         self.form = Card(parent, title='Новая задача',
-                         subtitle='слоты контракта: режим задачи окно выводит из роли')
+                         subtitle='слоты контракта: роль, действие, база; цель необязательна')
         self.form.grid(row=0, column=0, sticky='nsew')
         body = self.form.body
         body.columnconfigure(0, weight=1)
 
         ui.label(body, 'Роль', bg=ui.CARD, size=9).grid(row=0, column=0, sticky='w')
         self.role_box = ttk.Combobox(body, textvariable=self.role, values=list(ROLES),
-                                     style='Modern.TCombobox')
+                                     style='Modern.TCombobox', state='readonly')
         self.role_box.grid(row=1, column=0, sticky='ew', pady=(4, 3))
         self.role_box.bind('<<ComboboxSelected>>', lambda _event: self._on_role_change())
-        self.role_box.bind('<KeyRelease>', lambda _event: self._on_role_change())
-        self.role_hint = ui.label(body, '', bg=ui.CARD, size=8)
+        ui.bind_clipboard(self.role_box)
+        self.role_hint = ui.label(body, '', bg=ui.CARD, size=8, wrap=430)
         self.role_hint.grid(row=2, column=0, sticky='w')
 
         ui.label(body, 'Что нужно сделать', bg=ui.CARD, size=9).grid(row=3, column=0, sticky='w',
@@ -237,9 +299,18 @@ class AgentGUI(object):
         ui.label(head, 'База', bg=ui.CARD, size=9).grid(row=0, column=0, sticky='w')
         self.db_hint = ui.label(head, '', bg=ui.CARD, size=8, color=ui.MUTED)
         self.db_hint.grid(row=0, column=1, sticky='e')
-        self.db_box = ttk.Combobox(body, textvariable=self.db, style='Modern.TCombobox')
-        self.db_box.grid(row=6, column=0, sticky='ew', pady=(4, 0))
-        self.db_box.bind('<KeyRelease>', lambda _event: self._update_db_hint())
+        pick = tk.Frame(body, bg=ui.CARD)
+        pick.grid(row=6, column=0, sticky='ew', pady=(4, 0))
+        pick.columnconfigure(0, weight=1)
+        self.db_box = ttk.Combobox(pick, textvariable=self.db, style='Modern.TCombobox',
+                                   state='readonly', height=12)
+        self.db_box.grid(row=0, column=0, sticky='ew')
+        self.db_box.bind('<<ComboboxSelected>>', lambda _event: self._update_db_hint())
+        ui.bind_clipboard(self.db_box)
+        Button(pick, 'Обновить список', kind='secondary', height=32, size=9, bg_parent=ui.CARD,
+               command=self._refresh_db_list).grid(row=0, column=1, padx=(8, 0))
+        self.db_path = ui.label(pick, '', bg=ui.CARD, size=8, mono_space=True)
+        self.db_path.grid(row=1, column=0, columnspan=2, sticky='w', pady=(4, 0))
 
         ui.label(body, 'Цель (не обязательно)', bg=ui.CARD, size=9).grid(row=7, column=0,
                                                                          sticky='w', pady=(14, 0))
@@ -265,52 +336,64 @@ class AgentGUI(object):
     # --- роль, база и режим --------------------------------------------------
 
     def mode(self):
-        """Режим задачи выводится из роли: «инженер харнесса» - задача по харнессу."""
-        return 'harness' if HARNESS_ROLE in (self.role.get() or '').lower() else 'db'
+        """Режим задачи окна: всегда по базе.
+
+        Задачу по инструменту агента («инженер харнесса») окно не ставит: её принимает
+        только командная строка харнесса, и integration\\task.py отклоняет такую задачу
+        от отправителя gui.
+        """
+        return MODE
 
     def _on_role_change(self):
-        harness = self.mode() == 'harness'
-        if harness:
-            self.role_hint.configure(text='роль «инженер харнесса»: задача по самому инструменту, база не нужна')
-            if self.db.get():
-                self._db_memory = self.db.get()
-                self.db.set('')
-        else:
-            self.role_hint.configure(text='задача по базе: выберите базу из списка ниже')
-            if not self.db.get() and getattr(self, '_db_memory', ''):
-                self.db.set(self._db_memory)
-        self.db_box.configure(state='disabled' if harness else 'readonly')
+        """Подсказать, чем роль отличается от соседней: роль задаёт приоритетный слой."""
+        self.role_hint.configure(text=ROLES_HINTS.get(self.role.get()) or '')
         self._update_db_hint()
 
     def _refresh_db_list(self):
-        """Список баз берётся из .v8-project.json: выдуманную базу агент не примет."""
-        labels = database_labels(self.root_dir)
-        self.db_box.configure(values=labels)
-        if labels and not self.db.get():
-            self.db.set(labels[0])
+        """Список баз из .v8-project.json: выдуманную базу агент не примет.
+
+        Метка строки - «id - имя базы», а в задачу уходит id. Строка из прошлого запуска
+        могла быть в старом виде («id (алиасы)»): тогда она приводится к id.
+        """
+        self.db_choices = database_choices(self.root_dir)
+        values = [item['value'] for item in self.db_choices]
+        self.db_box.configure(values=[item['label'] for item in self.db_choices])
+        current = (self.db.get() or '').strip()
+        if current not in values:
+            old = current.split(' (')[0].strip()
+            self.db.set(old if old in values else (values[0] if values else ''))
         self._update_db_hint()
 
+    def _db_value(self):
+        """id выбранной базы: в задачу уходит он, а не подпись списка."""
+        label = (self.db.get() or '').strip()
+        for item in self.db_choices:
+            if item['label'] == label:
+                return item['value']
+        return label.split(' - ')[0].split(' (')[0].strip()
+
     def _update_db_hint(self):
-        labels = self.db_box.cget('values') or ()
-        if self.mode() == 'harness':
-            text = 'для этой роли база не требуется'
-        elif not labels:
-            text = 'нет .v8-project.json: список баз пуст'
-        else:
-            text = 'баз в .v8-project.json: %d' % len(labels)
-        self.db_hint.configure(text=text)
+        """Счётчик баз и путь выбранной: видно и что баз несколько, и какая выбрана."""
+        count = len(self.db_choices)
+        if not count:
+            self.db_hint.configure(text='нет .v8-project.json: список баз пуст')
+            self.db_path.configure(text='')
+            return
+        self.db_hint.configure(text='баз в .v8-project.json: %d' % count)
+        chosen = self._db_value()
+        path = ''
+        for item in self.db_choices:
+            if item['value'] == chosen:
+                path = item['path']
+                break
+        self.db_path.configure(text=path or 'путь не задан в .v8-project.json')
 
     # --- отправка ------------------------------------------------------------
 
     def _collect(self):
         """Собрать задачу из полей: тот же код, что у HTTP-сервера и командной строки."""
-        mode = self.mode()
-        db = None
-        if mode == 'db':
-            label = (self.db.get() or '').strip()
-            db = label.split(' (')[0] if label else ''
-        task = make_task(self.role.get(), self.action.get(), self.goal.get(), db, mode,
-                         source='gui', deliver='auto')
+        task = make_task(self.role.get(), self.action.get(), self.goal.get(), self._db_value(),
+                         MODE, source='gui', deliver='auto')
         return validate_task(self.root_dir, task)
 
     def _remember_sent(self, task):
@@ -346,8 +429,8 @@ class AgentGUI(object):
         self._clear_form()
         alive, _message = self._watcher_state()
         if alive:
-            self.banner.show('задача %s записана в журнал; watcher работает - задача уйдёт в Cline'
-                             % task['id'], 'ok')
+            self.banner.show('задача %s записана в журнал; watcher работает - подтверждение '
+                             'доставки в Cline видно в «Ответе» ниже' % task['id'], 'ok')
         else:
             self.banner.show('задача %s записана в журнал, но watcher не работает: нажмите '
                              '«Поднять watcher», иначе задача до агента не дойдёт' % task['id'], 'warn')
@@ -412,15 +495,19 @@ class AgentGUI(object):
         body.columnconfigure(0, weight=1)
         body.rowconfigure(0, weight=1)
 
+        # minwidth у колонок обязателен: ttk ужимает перетаскиваемую колонку до minwidth,
+        # если сумма ширин не помещается в поле таблицы, а по умолчанию это 20 пикселей -
+        # колонка «схлопывалась» при перетаскивании её границы. Ширины подобраны так,
+        # чтобы сумма (660) помещалась в правую половину окна.
         columns = ('id', 'created', 'role', 'db', 'state')
         self.tree = ttk.Treeview(body, columns=columns, show='headings', style='Modern.Treeview')
-        for name, title, width, stretch in (('id', 'Задача', 200, True),
-                                            ('created', 'Создана', 130, False),
-                                            ('role', 'Роль', 140, False),
-                                            ('db', 'База', 120, False),
-                                            ('state', 'Состояние', 130, False)):
+        for name, title, width, minwidth, stretch in (('id', 'Задача', 210, 150, True),
+                                                      ('created', 'Создана', 120, 100, False),
+                                                      ('role', 'Роль', 110, 90, False),
+                                                      ('db', 'База', 100, 80, False),
+                                                      ('state', 'Состояние', 120, 100, False)):
             self.tree.heading(name, text=title)
-            self.tree.column(name, width=width, anchor='w', stretch=stretch)
+            self.tree.column(name, width=width, minwidth=minwidth, anchor='w', stretch=stretch)
         self.tree.grid(row=0, column=0, sticky='nsew')
         self.tree.bind('<<TreeviewSelect>>', self._on_select)
         self.tree.bind('<Double-1>', lambda _event: self.show_details())
@@ -438,15 +525,31 @@ class AgentGUI(object):
         Button(tools, 'Каталог очереди', kind='ghost', height=32, size=9, bg_parent=ui.CARD,
                command=self._open_queue_dir).pack(side='left', padx=(8, 0))
 
-        answer_card = Card(right, title='Ответ')
+        answer_card = Card(right, title='Ответ',
+                           subtitle='ответ агента - markdown; HTML собирается при скачивании')
         answer_card.grid(row=1, column=0, sticky='nsew', pady=(16, 0))
         abody = answer_card.body
         abody.columnconfigure(0, weight=1)
         abody.rowconfigure(1, weight=1)
-        self.answer_meta = ui.label(abody, 'задача не выбрана', bg=ui.CARD, size=9)
+        self.answer_meta = ui.label(abody, 'задача не выбрана', bg=ui.CARD, size=9, wrap=560)
         self.answer_meta.grid(row=0, column=0, sticky='w', pady=(0, 8))
         self.answer = TextArea(abody, height=10, read_only=True)
         self.answer.grid(row=1, column=0, sticky='nsew')
+        answer_tools = tk.Frame(abody, bg=ui.CARD)
+        answer_tools.grid(row=2, column=0, sticky='ew', pady=(10, 0))
+        Button(answer_tools, 'Скачать ответ (HTML)', kind='primary', height=32, size=9,
+               command=lambda: self.download_answer('html')).pack(side='left')
+        Button(answer_tools, 'Скачать ответ (MD)', kind='secondary', height=32, size=9,
+               bg_parent=ui.CARD,
+               command=lambda: self.download_answer('md')).pack(side='left', padx=(8, 0))
+        self.redeliver_button = Button(answer_tools, 'Повторить доставку', kind='secondary',
+                                       height=32, size=9, bg_parent=ui.CARD,
+                                       command=self.redeliver_task)
+        self._packedredeliver_button = False
+        self.copy_button = Button(answer_tools, 'Скопировать текст задачи', kind='ghost',
+                                  height=32, size=9, bg_parent=ui.CARD,
+                                  command=self.copy_task_text)
+        self.copy_button.pack(side='left', padx=(8, 0))
 
     # --- обновление окна -----------------------------------------------------
 
@@ -626,10 +729,25 @@ class AgentGUI(object):
             self.answer_meta.configure(text='%s · %s' % (task_id, state_label(row.get('state'))))
             self.answer.set('результат ещё не записан.\n\n%s' % hint, read_only=True)
             return
-        self.answer_meta.configure(text='%s · %s · доставка %s · записано %s'
-                                   % (task_id, result.get('status') or '-',
-                                      result.get('delivery') or '-', result.get('written_at') or ''))
+        self.answer_meta.configure(text=self._result_meta(task_id, result))
         self.answer.set(self._answer_text(result), read_only=True)
+
+    def _result_meta(self, task_id, result):
+        """Строка над ответом: состояние, режим доставки и её подтверждение.
+
+        Подтверждение - это факт из журнала сессий Cline (transport\\cline.py): если оно
+        «нет», ответа по задаче не будет, пока формулировку не вставят в чат руками.
+        """
+        parts = [task_id, result.get('status') or '-']
+        if result.get('delivery'):
+            parts.append('доставка %s' % result['delivery'])
+        if result.get('status') == 'delivered':
+            parts.append('подтверждение: %s' % ('да' if result.get('confirmed') else 'нет'))
+            if result.get('attempts'):
+                parts.append('попыток: %s' % result['attempts'])
+        if result.get('written_at'):
+            parts.append('записано %s' % result['written_at'])
+        return ' · '.join(parts)
 
     def _answer_text(self, result):
         """Текст ответа: преамбула и отчёт из файла ответа плюс свободный текст."""
@@ -637,6 +755,10 @@ class AgentGUI(object):
                 % (result.get('layer') or '-', result.get('mcp') or '-', result.get('skills') or '-',
                    result.get('verification') or '-', result.get('done') or '-',
                    result.get('not_verified') or '-'))
+        if result.get('status') == 'delivered' and not result.get('confirmed'):
+            head += ('внимание: задача в Cline не появилась (обработчик ссылки работает только при '
+                     'открытой панели Cline). Кнопка «Скопировать текст задачи» кладёт формулировку '
+                     'в буфер обмена, «Повторить доставку» открывает ссылку заново.\n\n')
         if result.get('message'):
             head += 'сообщение: %s\n\n' % result['message']
         return head + (result.get('answer') or '')
@@ -713,6 +835,128 @@ class AgentGUI(object):
         self.polling = False
         self.remote_error = None
         self.remote_health = None
+        self._sync_mode_controls()
+        self.refresh()
+
+    # --- ответ: скачивание и копирование -------------------------------------
+
+    def _answer_markdown(self, task_id):
+        """Текст ответа для скачивания: файл ответа рядом или ответ с сервера."""
+        path = self.store.answer_path(task_id)
+        if os.path.isfile(path):
+            with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                return f.read(), 'файл ответа %s' % self.store.rel(path)
+        if self.delivery.get() == 'http':
+            code, body = self._http_answer(task_id, 'md')
+            if code == 200:
+                return body.get('content') or '', 'ответ сервера %s' % self.server.get()
+        result = (self._row(task_id) or {}).get('result') or {}
+        return result.get('answer') or '', 'результат из очереди'
+
+    def _http_answer(self, task_id, kind):
+        """Ответ задачи файлом с сервера: GET /api/answer/<id>?format=<kind>."""
+        url = '%s/api/answer/%s?format=%s' % (self.server.get().rstrip('/'),
+                                              urllib.parse.quote(task_id), kind)
+        request = urllib.request.Request(url, headers=self._headers())
+        try:
+            with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as response:
+                return response.status, json.loads(response.read().decode('utf-8'))
+        except urllib.error.HTTPError as exc:
+            try:
+                return exc.code, json.loads(exc.read().decode('utf-8'))
+            except ValueError:
+                return exc.code, {}
+        except (urllib.error.URLError, OSError) as exc:
+            return 0, {'error': str(exc)}
+
+    def download_answer(self, kind='html'):
+        """Скачать ответ задачи: markdown как есть или страницу HTML по нему.
+
+        Агент всегда пишет markdown - он читается человеком и правится руками. HTML
+        собирается в момент скачивания (integration\\md_to_html.py), хранить его не надо.
+        """
+        task_id = self.selected or (self.tree.selection() or (None,))[0]
+        if not task_id:
+            self.banner.show('выберите задачу в списке', 'warn')
+            return
+        text, source = self._answer_markdown(task_id)
+        if not text.strip():
+            self.banner.show('ответ задачи %s ещё не записан' % task_id, 'warn')
+            return
+        if kind == 'html':
+            types = [('Страница HTML', '*.html'), ('Все файлы', '*.*')]
+        else:
+            types = [('Файл markdown', '*.md'), ('Все файлы', '*.*')]
+        target = filedialog.asksaveasfilename(parent=self.root, title='Куда сохранить ответ',
+                                              initialfile=md_to_html.answer_file_name(task_id, kind),
+                                              defaultextension='.' + kind, filetypes=types)
+        if not target:
+            return
+        try:
+            if kind == 'html':
+                md_to_html.write_file(target, text, title='Ответ задачи %s' % task_id,
+                                      source=source)
+            else:
+                with open(target, 'w', encoding='utf-8', newline='\n') as f:
+                    f.write(text)
+        except OSError as exc:
+            self.banner.show('не удалось сохранить файл: %s' % exc, 'err')
+            return
+        self.banner.show('ответ сохранён: %s' % target, 'ok')
+
+    def copy_task_text(self):
+        """Формулировку - в буфер обмена: её вставляют в чат, когда доставка не прошла."""
+        task_id = self.selected or (self.tree.selection() or (None,))[0]
+        if not task_id:
+            self.banner.show('выберите задачу в списке', 'warn')
+            return
+        prompt_path = os.path.join(self.store.dirs['prompts'], 'prompt_%s.txt' % task_id)
+        text = ''
+        if os.path.isfile(prompt_path):
+            with open(prompt_path, 'r', encoding='utf-8', errors='replace') as f:
+                text = f.read()
+        if not text.strip():
+            text = self._task(task_id).get('prompt') or ''
+        if not text.strip():
+            self.banner.show('формулировка не найдена: файл %s' % prompt_path, 'warn')
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        self.banner.show('формулировка скопирована: вставьте её в чат Cline и отправьте', 'ok')
+
+    def redeliver_task(self):
+        """Открыть задачу в Cline заново: доставка не подтвердилась.
+
+        Работу делает agent.py --redeliver - тот же код доставки и подтверждения, что у
+        watcher-а, поэтому второй реализации в окне нет. Команда идёт в потоке: окно не
+        должно замирать на время ожидания подтверждения.
+        """
+        task_id = self.selected or (self.tree.selection() or (None,))[0]
+        if not task_id:
+            self.banner.show('выберите задачу в списке', 'warn')
+            return
+        command = [sys.executable, os.path.join(self.root_dir, 'integration', 'agent.py'),
+                   '--root', self.root_dir, '--redeliver', '--task', task_id]
+        self.banner.show('повторяю доставку задачи %s...' % task_id, 'info')
+
+        def worker():
+            try:
+                done = subprocess.run(command, cwd=self.root_dir, capture_output=True, timeout=300)
+                report = ((done.stdout or b'').decode('utf-8', 'replace').strip() or
+                          (done.stderr or b'').decode('utf-8', 'replace').strip())
+                code = done.returncode
+            except (OSError, subprocess.SubprocessError) as exc:
+                report, code = str(exc), 1
+            self.root.after(0, lambda: self._redeliver_done(task_id, code, report))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _redeliver_done(self, task_id, code, report):
+        """Показать итог повторной доставки: строки вывода собраны в одну."""
+        flat = '; '.join(line.strip() for line in (report or '').splitlines() if line.strip())
+        self.banner.show('повторная доставка %s (код %s): %s'
+                         % (task_id, code, flat[:400] or 'нет вывода'),
+                         'ok' if code == 0 else 'warn')
         self.refresh()
 
     # --- watcher очереди -----------------------------------------------------
@@ -838,14 +1082,17 @@ class AgentGUI(object):
         ui.label(body, 'Токен доступа (если сервер его требует)', bg=ui.CARD, size=9).grid(
             row=3, column=0, sticky='w', pady=(12, 4))
         Input(body, textvariable=self.token, show='*').grid(row=4, column=0, sticky='ew')
-        ui.label(body, 'режим очереди читает ответ из queue\\outbox, режим сервера - запросом '
-                       'к /api/result', bg=ui.CARD, size=8).grid(row=5, column=0, sticky='w',
-                                                                 pady=(10, 0))
+        ui.label(body, 'режим очереди читает ответ из queue\\outbox, режим сервера - запросами '
+                       'к /api/result и /api/answer', bg=ui.CARD, size=8).grid(row=5, column=0,
+                                                                              sticky='w',
+                                                                              pady=(10, 0))
 
-        watch = Card(outer, title='Watcher очереди',
-                     subtitle='без него строки журнала не разбираются и задачи не доходят до агента')
-        watch.pack(fill='x', pady=(16, 0))
-        wbody = watch.body
+        # Две карточки состояния, видна одна: watcher - когда очередь рядом, сервер - когда
+        # очередь разбирает сервер. Кнопок управления у серверной карточки нет: очередь и
+        # её watcher живут на машине сервера, окно о них только спрашивает.
+        self.watch_card = Card(outer, title='Watcher очереди рядом',
+                               subtitle='без него строки журнала не разбираются и задачи не доходят до агента')
+        wbody = self.watch_card.body
         wbody.columnconfigure(0, weight=1)
         state_chip = Chip(wbody, 'проверяю', 'muted')
         state_chip.grid(row=0, column=0, sticky='w')
@@ -859,6 +1106,16 @@ class AgentGUI(object):
                command=self.start_watcher).pack(side='left')
         Button(buttons, 'Остановить watcher', kind='secondary', height=32, size=9,
                bg_parent=ui.CARD, command=self.stop_watcher).pack(side='left', padx=(10, 0))
+
+        self.server_watch_card = Card(outer, title='Очередь на сервере',
+                                      subtitle='разбор очереди и доставку выполняет сервер')
+        sbody = self.server_watch_card.body
+        sbody.columnconfigure(0, weight=1)
+        self.server_chip = Chip(sbody, 'проверяю', 'muted')
+        self.server_chip.grid(row=0, column=0, sticky='w')
+        ui.label(sbody, 'состояние читается запросом GET /api/health: watcher сервера, счётчики '
+                        'очереди и её каталог на машине сервера', bg=ui.CARD, size=8,
+                 wrap=520).grid(row=1, column=0, sticky='w', pady=(10, 0))
 
         log = Card(outer, title='Журнал доставки (queue\\bridge.jsonl)')
         log.pack(fill='both', expand=True, pady=(16, 0))
@@ -877,10 +1134,28 @@ class AgentGUI(object):
         self._refresh_settings(journal, state_chip)
 
     def _refresh_settings(self, journal, state_chip):
-        """Обновить журнал доставки и пилюлю watcher-а в окне настроек."""
+        """Обновить журнал доставки и состояние очереди в окне настроек.
+
+        В режиме очереди рядом состояние берётся у локального watcher-а, в режиме сервера -
+        запросом GET /api/health (кнопка «Обновить» делает его синхронно: это явное
+        действие человека, а не фоновый опрос).
+        """
         journal.set(self._bridge_tail(), read_only=True)
-        alive, message = self._watcher_state()
-        state_chip.set('watcher: %s' % message, 'ok' if alive else 'err')
+        if self.delivery.get() == 'http':
+            try:
+                self.remote_health = self._http_get('/api/health')
+                self.remote_error = None
+            except Exception as exc:  # сервер молчит - показываем причину, окно не падает
+                self.remote_error = str(exc)
+            alive, message = self._remote_watcher_state()
+            if self.remote_error:
+                message = 'сервер недоступен: %s' % self.remote_error
+            state_chip.set('сервер: %s' % message, 'ok' if alive else 'err')
+            self.server_chip.set('watcher сервера: %s' % message, 'ok' if alive else 'err')
+        else:
+            alive, message = self._watcher_state()
+            state_chip.set('watcher: %s' % message, 'ok' if alive else 'err')
+        self._sync_settings_cards()
 
 
 def main(argv=None):

@@ -25,6 +25,10 @@ from transport.schema import read_schema, validate, format_errors  # noqa: E402
 from transport.store import DEFAULT_TIMEOUT_S, host_name, new_task_id, now_iso, write_text_atomic  # noqa: E402
 
 MODES = ('db', 'harness')
+# Отправители, которым разрешена задача по инструменту агента (mode=harness):
+# командная строка и файловый обмен на машине харнесса. Окно задач (gui) и
+# HTTP-сервер (http) - отправители заказчика, они такую задачу не ставят.
+HARNESS_SOURCES = ('cli', 'agent', 'file')
 DBS_FILE = '.v8-project.json'
 
 # Слоты контракта: «как <роль> сделай <действие> в базе <база> чтобы <цель> по START.md».
@@ -138,15 +142,25 @@ def load_databases(root):
 
 
 def database_labels(root):
-    """Строки для выпадающего списка GUI: id плюс алиасы."""
-    labels = []
+    """Строки для выпадающего списка окна: «id - имя базы», без алиасов.
+
+    Алиасы в списке не показываются: строка из них вырастала до полстроки и прятала
+    сам факт, что баз в конфигурации несколько.
+    """
+    return [item['label'] for item in database_choices(root)]
+
+
+def database_choices(root):
+    """Записи баз для окна задач: label (что видно), value (id для задачи), path."""
+    choices = []
     for entry in load_databases(root):
-        aliases = entry.get('aliases') or []
-        label = entry.get('id') or entry.get('name') or ''
-        if aliases:
-            label = '%s (%s)' % (label, ', '.join(aliases))
-        labels.append(label)
-    return labels
+        value = entry.get('id') or entry.get('name') or ''
+        name = entry.get('name') or ''
+        label = value if (not name or name == value) else '%s - %s' % (value, name)
+        choices.append({'label': label, 'value': value,
+                        'path': entry.get('path') or entry.get('ref') or
+                                entry.get('server') or ''})
+    return choices
 
 
 def resolve_db(root, value):
@@ -186,8 +200,17 @@ def validate_task(root, raw):
             entry, message = resolve_db(root, task['db'])
             if entry is None:
                 errors.append('режим db: %s' % message)
-    elif task.get('mode') == 'harness' and task.get('db'):
-        errors.append('режим harness: слот базы должен быть пустым')
+    elif task.get('mode') == 'harness':
+        if task.get('db'):
+            errors.append('режим harness: слот базы должен быть пустым')
+        # Задачу по самому инструменту агента ставит только агент (командная строка или
+        # файловый обмен на машине харнесса). Окно задач и HTTP-сервер - отправители
+        # заказчика: через них инструмент агента не переписывается.
+        source = (task.get('source') or 'cli').lower()
+        if source not in HARNESS_SOURCES:
+            errors.append('режим harness: отправитель «%s» не ставит задачи по инструменту '
+                          'агента (это делает только сам агент из командной строки)'
+                          % source)
     return task, errors
 
 

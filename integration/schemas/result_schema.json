@@ -35,8 +35,24 @@
     },
     "delivery": {
       "type": "string",
-      "enum": ["uri", "lg-task", "manual", "echo"],
+      "enum": ["uri", "manual", "echo"],
       "description": "Каким режимом задача передана в Cline."
+    },
+    "confirmed": {
+      "type": "boolean",
+      "description": "Доставка подтверждена журналом сессий Cline: задача в Cline создана. false - ссылка открыта, но задачи в Cline нет (панель Cline должна быть открыта)."
+    },
+    "attempts": {
+      "type": "integer",
+      "description": "Сколько раз открывалась ссылка доставки."
+    },
+    "cline_session": {
+      "type": "string",
+      "description": "Идентификатор сессии Cline, которой подтверждена доставка."
+    },
+    "cline_note": {
+      "type": "string",
+      "description": "Пояснение подтверждения: что именно прочитано в журнале сессий Cline."
     },
     "prompt_file": {
       "type": "string",

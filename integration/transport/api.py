@@ -6,6 +6,8 @@
     GET  /api/health          состояние очереди: счётчики, позиция журнала, жив ли watcher
     POST /api/task            принять задачу: тело - объект task_schema.json; ответ 202
     GET  /api/result/<id>     результат задачи: 200 с result_schema.json либо 404 с состоянием
+    GET  /api/answer/<id>     ответ задачи файлом: markdown агента (format=md) или
+                              страница HTML по нему (format=html, по умолчанию)
     GET  /api/tasks           последние результаты и счётчики
 
 Почему приём задачи не кладёт её сразу в inbox: сервер и watcher - разные процессы, а
@@ -28,6 +30,8 @@ if _INTEGRATION not in sys.path:
 
 from task import errors_to_text, save_rejected, validate_task  # noqa: E402
 from transport.store import QueueStore  # noqa: E402
+
+import md_to_html  # noqa: E402
 
 WATCHER_ALIVE_S = 15.0
 
@@ -96,6 +100,34 @@ class Api(object):
         return 404, {'task_id': task_id, 'state': state,
                      'message': 'результат ещё не записан'}
 
+    def answer(self, task_id, kind='html'):
+        """Ответ задачи файлом: markdown агента или страница HTML по нему.
+
+        Формат ответа агента - markdown (queue\\answers\\answer_<id>.md): он читается
+        человеком и правится руками. HTML собирается по нему здесь, в момент запроса -
+        страница нужна для скачивания, а не для хранения.
+        """
+        kind = 'md' if (kind or '').lower() in ('md', 'markdown') else 'html'
+        text = ''
+        source = self.store.answer_path(task_id)
+        if os.path.isfile(source):
+            with open(source, 'r', encoding='utf-8') as f:
+                text = f.read()
+        if not text:
+            result = self.store.result(task_id) or {}
+            text = result.get('answer') or ''
+        if not text:
+            return 404, {'task_id': task_id, 'state': self.store.state(task_id),
+                         'error': 'ответ ещё не записан'}
+        if kind == 'html':
+            content = md_to_html.render(text, title='Ответ задачи %s' % task_id,
+                                       source='задача %s из очереди интеграции' % task_id)
+        else:
+            content = text
+        return 200, {'task_id': task_id, 'format': kind,
+                     'file_name': md_to_html.answer_file_name(task_id, kind),
+                     'content': content}
+
     def tasks(self, limit=20):
         return 200, {'counts': self.store.counts(), 'results': self.store.recent_results(limit)}
 
@@ -121,6 +153,10 @@ class Api(object):
         prefix = '/api/result/'
         if clean.startswith(prefix) and method in ('GET', 'HEAD'):
             return self.result(clean[len(prefix):])
+        prefix = '/api/answer/'
+        if clean.startswith(prefix) and method in ('GET', 'HEAD'):
+            kind = ((query or {}).get('format') or ['html'])[0]
+            return self.answer(clean[len(prefix):], kind)
         if method == 'OPTIONS':
             return 204, None
         return 404, {'error': 'неизвестный маршрут', 'path': clean, 'method': method}

@@ -19,31 +19,43 @@
 
 Режимы (ключ --deliver у agent.py и watcher.py):
 
-    uri      открыть URI - задача создаётся в Cline автоматически (по умолчанию);
-    lg-task  то же плюс POST в вебхук Cline, если задан адрес --webhook-url;
+    uri      открыть URI - задача создаётся в Cline (по умолчанию);
     manual   ничего не открывать: напечатать URI и строку запуска - их применяет человек;
     echo     не трогать Cline совсем: только файлы и журналы (проверка цепочки).
 
+Доставка не заканчивается открытием ссылки. Обработчик URI у Cline работает только при
+видимой панели Cline (`getVisibleInstance` в расширении), поэтому «ссылка принята
+оболочкой» - не результат. После открытия задача ищется в журнале сессий Cline
+(transport\\cline.py): появилась сессия с идентификатором задачи - доставка
+подтверждена; не появилась - попытка повторяется (открытие панели и повтор дают ей
+шанс пройти), а в итоге отправитель получает явное «не подтверждено» и путь к файлу
+формулировки, чтобы вставить текст в чат руками.
+
 Результат delivery - словарь: режим, статус, URI, путь файла формулировки, путь файла
-ответа, строка запуска и пояснение. Он попадает в queue\\bridge.jsonl и в итоговый
-result_<id>.json.
+ответа, строка запуска, число попыток, признак подтверждения, сессия Cline и пояснение.
+Он попадает в queue\\bridge.jsonl и в итоговый result_<id>.json.
 """
 
 import json
 import os
+import shutil
+import subprocess
 import sys
-import urllib.error
+import time
 import urllib.parse
-import urllib.request
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
+from transport import cline  # noqa: E402
 from transport.store import now_iso, write_text_atomic  # noqa: E402
 
 URI_TASK = 'vscode://saoudrizwan.claude-dev/task?prompt='
-MODES = ('uri', 'lg-task', 'manual', 'echo')
+MODES = ('uri', 'manual', 'echo')
+DEFAULT_CONFIRM_S = 12.0
+RETRY_PAUSE_S = 3.0
+
 DEFAULT_TEMPLATE = """Задача внешней очереди %(id)s
 Отправитель: %(client)s, создана %(created_at)s, режим %(mode)s.
 Формулировка (формат контракта):
@@ -90,22 +102,45 @@ def build_command_line(uri):
     return 'code --open-url "%s"' % uri
 
 
-def post_webhook(url, payload, timeout=10):
-    """POST в вебхук Cline. Возвращает (успех, пояснение). Молчащий хост - не сбой очереди."""
-    body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
-    request = urllib.request.Request(url, data=body,
-                                     headers={'Content-Type': 'application/json; charset=utf-8'})
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return 200 <= response.status < 300, 'вебхук ответил %s' % response.status
-    except urllib.error.URLError as exc:
-        return False, 'вебхук недоступен: %s' % exc
-    except OSError as exc:
-        return False, 'вебхук: ошибка соединения: %s' % exc
+def open_uri(uri):
+    """Открыть URI задачи. Возвращает (успех, чем_открывали, пояснение).
+
+    Основной путь - ассоциация протокола Windows (`os.startfile`): на этой машине
+    `vscode://` зарегистрирован как `Code.exe --open-url`. Второй путь - команда `code`
+    (для систем без os.startfile). Успех означает только «ссылка принята»: создана ли
+    задача, показывает подтверждение в transport\\cline.py.
+    """
+    if hasattr(os, 'startfile'):
+        try:
+            os.startfile(uri)
+            return True, 'os.startfile', 'URI передан оболочке Windows'
+        except OSError as exc:
+            first_error = 'os.startfile: %s' % exc
+    else:
+        first_error = 'os.startfile недоступен (не Windows)'
+    code = shutil.which('code')
+    if code:
+        try:
+            done = subprocess.run([code, '--open-url', uri], capture_output=True, timeout=30)
+            if done.returncode == 0:
+                return True, 'code --open-url', 'VS Code принял ссылку'
+            tail = (done.stderr or b'').decode('utf-8', 'replace').strip()[:200]
+            return False, 'code --open-url', 'code ответил %s: %s' % (done.returncode, tail)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return False, 'code --open-url', 'code не запустился: %s' % exc
+    return False, 'нет', 'открыть URI нечем: %s; команда code не найдена' % first_error
 
 
-def deliver(task, mode, store, webhook_url=None, allow_gui=True):
-    """Передать задачу в Cline выбранным режимом. Возвращает словарь доставки."""
+
+def deliver(task, mode, store, allow_gui=True, attempts=3, confirm_timeout=None,
+            cline_data=None, cline_work_dir=None):
+    """Передать задачу в Cline выбранным режимом. Возвращает словарь доставки.
+
+    Режим uri открывает ссылку и ждёт подтверждения: обработчик URI у Cline работает
+    только при видимой панели Cline, поэтому попытка повторяется - панель открывается
+    первой же ссылкой. Режим manual ссылку не открывает (её применяет человек), echo
+    не трогает Cline вовсе.
+    """
     if mode == 'auto' or mode not in MODES:
         mode = 'uri'
     store.ensure()
@@ -120,6 +155,11 @@ def deliver(task, mode, store, webhook_url=None, allow_gui=True):
         'uri': '',
         'command_line': '',
         'message': '',
+        'attempts': 0,
+        'confirmed': False,
+        'cline_session': '',
+        'cline_note': '',
+        'opened_with': '',
     }
 
     if mode == 'echo':
@@ -129,32 +169,48 @@ def deliver(task, mode, store, webhook_url=None, allow_gui=True):
         result['uri'] = uri
         result['command_line'] = build_command_line(uri)
         if mode == 'manual':
+            result['cline_note'] = 'режим manual: ссылку открывает человек, подтверждения нет'
             result['message'] = 'режим manual: URI открывает человек строкой запуска'
-        elif not hasattr(os, 'startfile'):
-            result['status'] = 'error'
-            result['message'] = 'режим %s требует Windows: os.startfile недоступен' % mode
         elif not allow_gui:
             result['message'] = 'передача оболочке отключена флагом --no-gui: URI не открыт'
         else:
-            try:
-                os.startfile(uri)
-                result['message'] = 'URI передан оболочке Windows'
-            except Exception as exc:  # отказ ассоциации протокола - тоже сбой доставки
-                result['status'] = 'error'
-                result['message'] = 'не удалось открыть URI: %s' % exc
-        if mode == 'lg-task':
-            if webhook_url:
-                ok, message = post_webhook(webhook_url, {'prompt': task.get('prompt') or '',
-                                                         'taskId': task['id']})
-                result['webhook_ok'] = ok
-                result['message'] = '%s; %s' % (result['message'], message)
-            else:
-                result['webhook_ok'] = False
-                result['message'] = '%s; вебхук не задан (--webhook-url): режим равен uri' % result['message']
+            timeout = DEFAULT_CONFIRM_S if confirm_timeout is None else float(confirm_timeout)
+            total = max(1, int(attempts or 1))
+            since = cline.now_utc()
+            for attempt in range(1, total + 1):
+                result['attempts'] = attempt
+                opened, how, note = open_uri(uri)
+                result['opened_with'] = how
+                if not opened:
+                    result['status'] = 'error'
+                    result['message'] = 'ссылка не открыта (%s): %s' % (how, note)
+                    break
+                session, cline_note = cline.wait_for_task(task['id'], timeout, since=since,
+                                                          directory=cline_data,
+                                                          work_dir=cline_work_dir)
+                result['cline_note'] = cline_note
+                if session:
+                    result['confirmed'] = True
+                    result['cline_session'] = session.get('session_id') or ''
+                    result['message'] = 'задача создана в Cline: сессия %s (%s)' % (
+                        result['cline_session'] or 'идентификатор не прочитан', how)
+                    break
+                result['message'] = ('ссылка открыта (%s), но задача в Cline не появилась: '
+                                     'панель Cline должна быть открыта в окне VS Code' % how)
+                if attempt < total:
+                    time.sleep(RETRY_PAUSE_S)
+            if result['status'] != 'error' and not result['confirmed']:
+                result['message'] = ('%s. Формулировка: %s - вставьте её в чат Cline вручную '
+                                     'или повторите доставку (integration\\agent.py '
+                                     '--redeliver --task %s)'
+                                     % (result['message'], prompt_rel, task['id']))
 
     record = dict(result)
     record['event'] = 'deliver'
     record['task_id'] = task['id']
     record['delivered_at'] = now_iso()
     store.log_bridge(record)
+    if result['status'] == 'delivered' and not result['confirmed'] and mode != 'manual':
+        store.log_bridge({'event': 'deliver_unconfirmed', 'task_id': task['id'],
+                          'attempts': result['attempts'], 'message': result['message']})
     return result

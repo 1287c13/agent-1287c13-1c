@@ -10,6 +10,9 @@
     --prepare      создать файл ответа со скелетом полей для конкретной задачи;
     --write-result записать итог задачи из файла ответа (это делает Cline, выполнив
                    задачу: файл ответа и команда записи описаны в docs\07-external-integration.md);
+    --redeliver    открыть задачу из очереди в Cline заново: доставка не подтвердилась;
+    --render-answer ответ задачи в HTML: markdown агента превращается в страницу .html;
+
     --sweep        пометить задачи, по которым результат не записан дольше timeout_s;
     --list         показать, что лежит в очереди.
 
@@ -32,6 +35,7 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 import bridge  # noqa: E402
+import md_to_html  # noqa: E402
 from task import errors_to_text, make_task, project_root, validate_task  # noqa: E402
 from transport.schema import read_schema, validate  # noqa: E402
 from transport.store import QueueStore, now_iso, read_json, setup_stdio, write_text_atomic  # noqa: E402
@@ -131,7 +135,15 @@ def check_result(store, result):
     return validate(result, schema, 'результат')
 
 
-def process_once(store, deliver_mode='uri', webhook_url=None, allow_gui=True):
+def cline_work_dir(store):
+    """Каталог копий базы Cline: подтверждение доставки читает копию, не оригинал."""
+    path = os.path.join(store.root, 'temp', 'cline-db')
+    if not os.path.isdir(path):
+        os.makedirs(path)
+    return path
+
+
+def process_once(store, deliver_mode='uri', allow_gui=True, confirm_timeout=None, attempts=3):
     """Взять одну задачу из inbox, доставить в Cline и записать итог «delivered»."""
     task = store.claim()
     if task is None:
@@ -143,7 +155,9 @@ def process_once(store, deliver_mode='uri', webhook_url=None, allow_gui=True):
     if task.get('deliver') and task['deliver'] != 'auto' and deliver_mode == 'auto':
         mode = task['deliver']
     prepare_answer(store, task)
-    delivery = bridge.deliver(task, mode, store, webhook_url=webhook_url, allow_gui=allow_gui)
+    delivery = bridge.deliver(task, mode, store, allow_gui=allow_gui, attempts=attempts,
+                              confirm_timeout=confirm_timeout,
+                              cline_work_dir=cline_work_dir(store))
     status = 'delivered' if delivery.get('status') == 'delivered' else 'error'
     result = build_result(task, status, store, delivery, message=delivery.get('message') or '')
     result['delivered_at'] = now_iso()
@@ -212,6 +226,50 @@ def write_result(store, task_id, answer_path=None, status='done', message='', qu
     return result
 
 
+def redeliver(store, task_id, allow_gui=True, confirm_timeout=None, attempts=3):
+    """Открыть задачу в Cline заново: доставка не подтвердилась, ссылка потерялась.
+
+    Задача берётся из очереди или архива, а результат не переписывается целиком:
+    обновляются только поля доставки. Иначе ответ, уже записанный по задаче, снова
+    стал бы «ждём ответа».
+    """
+    task = load_task(store, task_id)
+    if not task.get('prompt') and not task.get('action'):
+        raise SystemExit('задача %s не найдена в очереди и в архиве' % task_id)
+    delivery = bridge.deliver(task, 'uri', store, allow_gui=allow_gui, attempts=attempts,
+                              confirm_timeout=confirm_timeout,
+                              cline_work_dir=cline_work_dir(store))
+    previous = store.result(task_id)
+    if previous:
+        for key in ('delivery', 'delivered_at', 'message', 'prompt_file', 'answer_file',
+                    'attempts', 'confirmed', 'cline_session', 'cline_note', 'uri'):
+            if delivery.get(key):
+                previous[key] = delivery[key]
+        previous['attempts'] = delivery.get('attempts') or previous.get('attempts')
+        previous['confirmed'] = bool(delivery.get('confirmed'))
+        if previous.get('status') in ('delivered', 'error', 'timeout'):
+            previous['status'] = delivery.get('status') or previous['status']
+        previous['written_at'] = now_iso()
+        store.complete(previous)
+    return delivery
+
+
+def render_answer(store, task_id, path=None, quiet=False):
+    """Ответ задачи в HTML: markdown агента превращается в страницу для скачивания."""
+    source = store.answer_path(task_id)
+    if not os.path.isfile(source):
+        raise SystemExit('файл ответа не найден: %s' % source)
+    with open(source, 'r', encoding='utf-8') as f:
+        text = f.read()
+    target = path or os.path.join(store.dirs['answers'],
+                                  md_to_html.answer_file_name(task_id))
+    md_to_html.write_file(target, text, title='Ответ задачи %s' % task_id,
+                          source='файл ответа: %s' % store.rel(source))
+    if not quiet:
+        print('страница ответа: %s' % store.rel(target))
+    return target
+
+
 def describe_queue(store, limit=20):
     """Состояние очереди: счётчики и последние итоги."""
     counts = store.counts()
@@ -262,9 +320,12 @@ def build_parser():
         description='Агент очереди интеграции: доставка задач в Cline и запись результатов.')
     parser.add_argument('--root', default=None,
                         help='корень харнесса (по умолчанию - каталог выше integration)')
-    parser.add_argument('--deliver', default='uri', choices=('uri', 'lg-task', 'manual', 'echo', 'auto'),
-                        help='режим доставки: uri (по умолчанию), lg-task, manual, echo, auto')
-    parser.add_argument('--webhook-url', default=None, help='адрес вебхука Cline для режима lg-task')
+    parser.add_argument('--deliver', default='uri', choices=('uri', 'manual', 'echo', 'auto'),
+                        help='режим доставки: uri (по умолчанию), manual, echo, auto')
+    parser.add_argument('--confirm-timeout', type=float, default=None,
+                        help='сколько секунд ждать подтверждения доставки (по умолчанию 12)')
+    parser.add_argument('--attempts', type=int, default=3,
+                        help='сколько раз открывать ссылку, пока задача не появится в Cline')
     parser.add_argument('--no-gui', action='store_true',
                         help='не открывать URI в оболочке Windows (проверка цепочки без Cline)')
     parser.add_argument('--process', action='store_true', help='взять одну задачу из inbox и доставить её')
@@ -272,6 +333,11 @@ def build_parser():
     parser.add_argument('--interval', type=float, default=2.0, help='пауза между проходами цикла, с')
     parser.add_argument('--prepare', action='store_true', help='создать файл ответа для задачи --task')
     parser.add_argument('--write-result', action='store_true', help='записать итог задачи из файла ответа')
+    parser.add_argument('--redeliver', action='store_true',
+                        help='открыть задачу --task в Cline заново (доставка не подтвердилась)')
+    parser.add_argument('--render-answer', action='store_true',
+                        help='ответ задачи --task в HTML: файл .html рядом с .md')
+    parser.add_argument('--html', default=None, help='куда положить страницу ответа (по умолчанию - queue\\answers)')
     parser.add_argument('--task', default=None, help='идентификатор задачи: t-...')
     parser.add_argument('--file', default=None, help='файл ответа (по умолчанию queue\\answers\\answer_<id>.md)')
     parser.add_argument('--status', default='done', choices=('done', 'error'), help='статус итога при --write-result')
@@ -334,6 +400,23 @@ def main(argv=None):
             print(json.dumps(result, ensure_ascii=False, indent=2))
         acted = True
 
+    if args.redeliver:
+        if not args.task:
+            raise SystemExit('--redeliver требует --task <идентификатор>')
+        delivery = redeliver(store, args.task, not args.no_gui, args.confirm_timeout,
+                             args.attempts)
+        print('доставка: %s' % delivery.get('status'))
+        print('подтверждение: %s' % ('да, сессия %s' % delivery.get('cline_session')
+                                     if delivery.get('confirmed') else 'нет'))
+        print('пояснение: %s' % (delivery.get('message') or ''))
+        acted = True
+
+    if args.render_answer:
+        if not args.task:
+            raise SystemExit('--render-answer требует --task <идентификатор>')
+        render_answer(store, args.task, args.html, args.quiet)
+        acted = True
+
     if args.sweep:
         marked = sweep(store, args.timeout)
         print('помечено timeout: %s' % len(marked))
@@ -344,7 +427,8 @@ def main(argv=None):
         acted = True
         try:
             while True:
-                emit(process_once(store, args.deliver, args.webhook_url, not args.no_gui), args.json)
+                emit(process_once(store, args.deliver, not args.no_gui, args.confirm_timeout,
+                                  args.attempts), args.json)
                 sweep(store, args.timeout)
                 time.sleep(args.interval)
         except KeyboardInterrupt:
@@ -352,7 +436,8 @@ def main(argv=None):
         return 0
 
     if args.process:
-        emit(process_once(store, args.deliver, args.webhook_url, not args.no_gui), args.json)
+        emit(process_once(store, args.deliver, not args.no_gui, args.confirm_timeout,
+                          args.attempts), args.json)
         acted = True
 
     if args.list or not acted:

@@ -138,7 +138,8 @@ def run_once(store, args):
     delivered = 0
     if args.process:
         while True:
-            result = agent.process_once(store, args.deliver, args.webhook_url, not args.no_gui)
+            result = agent.process_once(store, args.deliver, not args.no_gui, args.confirm_timeout,
+                                args.attempts)
             if result is None:
                 break
             delivered += 1
@@ -174,9 +175,12 @@ def parse_args(argv=None):
     parser.add_argument('--run', action='store_true', help='работать циклом, а не одним проходом')
     parser.add_argument('--interval', type=float, default=2.0, help='пауза между проходами цикла, с')
     parser.add_argument('--process', action='store_true', help='доставлять задачи из inbox в Cline')
-    parser.add_argument('--deliver', default='uri', choices=('uri', 'lg-task', 'manual', 'echo', 'auto'),
-                        help='режим доставки: uri (по умолчанию), lg-task, manual, echo, auto')
-    parser.add_argument('--webhook-url', default=None, help='адрес вебхука Cline для режима lg-task')
+    parser.add_argument('--deliver', default='uri', choices=('uri', 'manual', 'echo', 'auto'),
+                        help='режим доставки: uri (по умолчанию), manual, echo, auto')
+    parser.add_argument('--confirm-timeout', type=float, default=None,
+                        help='сколько секунд ждать подтверждения доставки (по умолчанию 12)')
+    parser.add_argument('--attempts', type=int, default=3,
+                        help='сколько раз открывать ссылку, пока задача не появится в Cline')
     parser.add_argument('--no-gui', action='store_true', help='не открывать URI (проверка без Cline)')
     parser.add_argument('--sweep', action='store_true', help='разбирать застрявшие задачи даже без --process')
     parser.add_argument('--timeout', type=float, default=None, help='порог застревания, с')
