@@ -232,12 +232,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy\install-local.ps1
 
 ```
 py -3 integration\agent.py --list
+py -3 integration\agent.py --submit --role "инженер харнесса" --action "<действие>" --goal "<цель>" --mode harness --deliver echo
+py -3 integration\watcher.py --deliver echo
 py -3 integration\agent.py --process --deliver echo --json
-py -3 integration\agent.py --submit --role "аналитик" --action "<действие>" --goal "<цель>" --db demo
 ```
 
 `--list` печатает каталог очереди, размер журнала, позицию чтения и счётчики состояний;
-`--submit` проверяет формулировку и кладёт задачу в журнал, не доставляя её.
+`--submit` проверяет формулировку и кладёт задачу в журнал, не доставляя её. Между
+постановкой и доставкой обязателен проход watcher-а: `--process` берёт задачи из `queue\inbox`,
+а туда их кладёт только разбор журнала. `--deliver echo` означает, что Cline не вызывается
+(тестовый режим), проверяются файлы очереди. Итог по задаче закрывается заполнением
+`queue\answers\answer_<id>.md` и вызовом `--write-result`.
 
 Границы слоя:
 
