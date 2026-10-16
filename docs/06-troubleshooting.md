@@ -289,8 +289,10 @@ Get-ChildItem 'scripts\*.ps1' | ForEach-Object {
 означает только то, что задача передана в Cline, и держится до записи итога.
 
 **Лечение:** заполнить `queue\answers\answer_<id>.md` и выполнить
-`py -3 integration\agent.py --write-result --task <id>`. Задачи без результата дольше
-`timeout_s` (по умолчанию 1800 с) помечает `--sweep` - статусом `timeout`.
+`py -3 integration\agent.py --write-result --task <id>`. Автоматического снятия у такого
+итога нет: `--sweep` помечает `timeout` только задачи, застрявшие в `queue\processing`
+(упавший агент между `claim` и `complete`), а задача со статусом `delivered` уже в
+`queue\archive` и ждёт человека.
 
 ### «Задача отклонена» или строка журнала не разобрана
 
