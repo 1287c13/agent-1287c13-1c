@@ -1,0 +1,83 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Задача внешней интеграции (integration-v1)",
+  "description": "Одна задача: строка журнала queue\\tasks.jsonl, файл queue\\inbox\\task_<id>.json. Проверяет integration\\transport\\schema.py.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["id", "created_at", "source", "mode", "role", "action", "goal", "prompt"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^t-[0-9]{8}-[0-9]{6}-[0-9a-f]{6}$",
+      "description": "Идентификатор задачи: t-<ГГГГММДД>-<ЧЧММСС>-<6 hex>. Его присваивает отправитель (GUI или сервер)."
+    },
+    "created_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$",
+      "description": "Местное время создания, ISO без зоны: ГГГГ-ММ-ДДTЧЧ:ММ:СС."
+    },
+    "source": {
+      "type": "string",
+      "enum": ["gui", "http", "file", "cli"],
+      "description": "Кто положил задачу в журнал: окно Tkinter, HTTP-сервер, файловый обмен, ручная правка."
+    },
+    "client": {
+      "type": "string",
+      "maxLength": 120,
+      "description": "Имя машины и пользователя отправителя: <COMPUTERNAME>\\<USERNAME>, заполняет отправитель."
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["db", "harness"],
+      "description": "db - задача по базе 1С (слот <база> обязателен), harness - задача по самому харнессу (базы нет)."
+    },
+    "role": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 120,
+      "description": "Роль: программист 1С, тестировщик, аналитик, администратор, инженер харнесса."
+    },
+    "action": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 2000,
+      "description": "Что сделать - слот <действие> контракта."
+    },
+    "db": {
+      "type": ["string", "null"],
+      "maxLength": 300,
+      "description": "Слот <база>: id, алиас, name или путь из .v8-project.json. Для mode=harness - null."
+    },
+    "goal": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 2000,
+      "description": "Критерий готовности - слот <цель>; из него строится строка «Проверка»."
+    },
+    "prompt": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 4000,
+      "description": "Готовая формулировка контракта одной строкой: как <роль> сделай <действие> [в базе <база>] чтобы <цель> по START.md."
+    },
+    "deliver": {
+      "type": "string",
+      "enum": ["uri", "lg-task", "manual", "echo", "auto"],
+      "description": "Режим доставки в Cline для этой задачи. auto - режим по умолчанию канала (флаг --deliver watcher-а)."
+    },
+    "timeout_s": {
+      "type": "integer",
+      "description": "Сколько секунд ждать результат, прежде чем пометить задачу как timeout. По умолчанию 1800."
+    },
+    "priority": {
+      "type": "string",
+      "enum": ["normal", "high"],
+      "description": "Резерв на будущее: очередь разбирается строго по порядку поступления."
+    },
+    "note": {
+      "type": "string",
+      "maxLength": 500,
+      "description": "Произвольная пометка отправителя; на разбор задачи не влияет."
+    }
+  }
+}

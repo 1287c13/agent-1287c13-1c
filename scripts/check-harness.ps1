@@ -15,6 +15,7 @@
     - учётные данные баз (user/password) для подключения и прогона;
     - занятость клиентских сеансов 1С (лицензия на клиентов);
     - каталог результатов анализа (analysis) и последний разбор;
+    - внешнюю интеграцию: файлы слоя, настройки, состояние очереди задач;
     - git: незакоммиченные изменения и неотправленные коммиты (origin);
     - развёрнутость вендорских репозиториев (skills-vendor).
 
@@ -252,7 +253,53 @@ if (Test-Path $vendorDir) {
 }
 else { Bad 'нет каталога skills-vendor - выполните scripts\install-vendor-repos.ps1' }
 
-# --- 14. Промпт-бюджет (всегда-инжектируемый префикс) -------------------------
+# --- 14. Внешняя интеграция (очередь задач) -----------------------------------
+Head 'Внешняя интеграция (очередь задач)'
+$layerFiles = @('integration\agent.py', 'integration\watcher.py', 'integration\task.py',
+    'integration\transport\store.py', 'integration\transport\api.py', 'gui\AgentGUI.py',
+    'deploy\install-local.ps1', 'deploy\config.example.json')
+$layerMissing = @($layerFiles | Where-Object { -not (Test-Path (Join-Path $Root $_)) })
+if ($layerMissing.Count -eq 0) { Ok 'файлы слоя на месте (агент, watcher, транспорт, окно, установка)' }
+else { Bad "нет файлов внешней интеграции: $($layerMissing -join ', ')" }
+
+$deployConfig = Join-Path $Root 'deploy\config.json'
+if (Test-Path $deployConfig) { Ok 'настройки интеграции созданы: deploy\config.json (правьте копию, в git она не уходит)' }
+else { Info 'настроек интеграции нет: deploy\config.json создает deploy\install-local.ps1 (слой необязательный)' }
+
+$queueDir = Join-Path $Root 'queue'
+if (-not (Test-Path $queueDir)) {
+    Info 'каталога queue нет: слой не запускался (deploy\install-local.ps1)'
+}
+else {
+    $journal = Join-Path $queueDir 'tasks.jsonl'
+    $journalBytes = 0
+    if (Test-Path $journal) { $journalBytes = (Get-Item $journal).Length }
+    $queueCounts = @{}
+    foreach ($sub in @('inbox', 'processing', 'outbox', 'failed')) {
+        $folder = Join-Path $queueDir $sub
+        $queueCounts[$sub] = 0
+        if (Test-Path $folder) {
+            $queueCounts[$sub] = @(Get-ChildItem $folder -File -Filter *.json -ErrorAction SilentlyContinue).Count
+        }
+    }
+    Ok "очередь queue: журнал $journalBytes байт, inbox $($queueCounts['inbox']), processing $($queueCounts['processing']), outbox $($queueCounts['outbox']), failed $($queueCounts['failed'])"
+    $offset = Join-Path $queueDir '.watch_offset'
+    if (-not (Test-Path $offset)) {
+        Warn 'watcher очереди не проходил ни разу: журнал не разбирается (deploy\run-watcher.bat)'
+    }
+    else {
+        $ageSec = [math]::Round(((Get-Date) - (Get-Item $offset).LastWriteTime).TotalSeconds, 0)
+        if ($ageSec -le 60) { Ok "watcher очереди: последний разбор ${ageSec} с назад" }
+        else { Warn "watcher очереди молчит: последний разбор ${ageSec} с назад - задачи не разбираются (deploy\run-watcher.bat)" }
+    }
+    if (Test-Path (Join-Path $Root '.git')) {
+        & git -C $Root check-ignore -q -- 'queue' 2>$null
+        if ($LASTEXITCODE -eq 0) { Ok 'каталог queue закрыт .gitignore (состояние обмена в git не хранится)' }
+        else { Warn 'queue не в .gitignore: состояние очереди может попасть в коммит' }
+    }
+}
+
+# --- 15. Промпт-бюджет (всегда-инжектируемый префикс) -------------------------
 # Файлы .clinerules\, AGENTS.md и метаданные скиллов уходят в каждый запрос целиком.
 # Бюджет и разбор по файлам - в scripts\check-context.ps1 (там же ключ -Mcp).
 Head 'Промпт-бюджет (что уходит в каждый запрос)'

@@ -1,0 +1,16 @@
+{
+  "comment": "Настройки внешней интеграции. Скопируйте в deploy\\config.json и правьте копию: config.json не попадает в git (может содержать токен доступа).",
+  "root": "C:\\_works\\1c-ai\\agent",
+  "python": "py -3",
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8760,
+    "token": ""
+  },
+  "watcher": {
+    "deliver": "auto",
+    "interval": 2.0,
+    "timeout_s": 1800,
+    "webhook_url": ""
+  }
+}
