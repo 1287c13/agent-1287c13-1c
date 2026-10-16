@@ -283,10 +283,10 @@ def build_parser():
     parser.add_argument('--json', action='store_true', help='печатать результат как JSON')
     parser.add_argument('--quiet', action='store_true', help='печатать только суть')
     parser.add_argument('--submit', action='store_true',
-                        help='поставить задачу из командной строки: нужны --action и --goal')
-    parser.add_argument('--role', default='программист 1С', help='роль для --submit')
+                        help='поставить задачу из командной строки: нужен --action; --goal необязателен')
+    parser.add_argument('--role', default='программист 1С', help='роль для --submit (роль задаёт и режим задачи)')
     parser.add_argument('--action', default=None, help='слот <действие> для --submit')
-    parser.add_argument('--goal', default=None, help='слот <цель> для --submit')
+    parser.add_argument('--goal', default=None, help='слот <цель> для --submit (необязателен)')
     parser.add_argument('--db', default=None, help='слот <база> для --submit')
     parser.add_argument('--mode', default='db', choices=('db', 'harness'), help='режим задачи для --submit')
     parser.add_argument('--source', default='cli', choices=('cli', 'gui', 'http', 'file'),
@@ -303,8 +303,9 @@ def main(argv=None):
     acted = False
 
     if args.submit:
-        if not args.action or not args.goal:
-            raise SystemExit('--submit требует --action <действие> и --goal <цель>')
+        if not args.action:
+            raise SystemExit('--submit требует --action <что нужно сделать>; '
+                             'слот <цель> (--goal) необязателен')
         task = make_task(args.role, args.action, args.goal, args.db, args.mode,
                          source=args.source, deliver=args.deliver)
         task, errors = validate_task(root, task)

@@ -245,11 +245,21 @@ class QueueStore(object):
         write_text_atomic(self.dirs['offset'], str(int(offset)))
 
     def offset_age_s(self):
-        """Сколько секунд назад watcher отмечал позицию. None - отметки ещё не было."""
-        path = self.dirs['offset']
-        if not os.path.isfile(path):
+        """Сколько секунд назад watcher подавал признаки жизни. None - признаков нет.
+
+        Признак - замок queue\\.watcher.lock: watcher обновляет его каждый проход, в том
+        числе когда новых строк в журнале нет. Возраст позиции чтения (.watch_offset) для
+        этого не годится: она пишется только при появлении строк, поэтому живой watcher на
+        простое выглядел бы молчащим. Из двух отметок берётся свежая.
+        """
+        marks = [os.path.join(self.base, '.watcher.lock'), self.dirs['offset']]
+        ages = []
+        for path in marks:
+            if os.path.isfile(path):
+                ages.append(max(0.0, time.time() - os.path.getmtime(path)))
+        if not ages:
             return None
-        return max(0.0, time.time() - os.path.getmtime(path))
+        return min(ages)
 
 
     # --- состояния задачи ----------------------------------------------------

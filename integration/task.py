@@ -28,8 +28,12 @@ MODES = ('db', 'harness')
 DBS_FILE = '.v8-project.json'
 
 # Слоты контракта: «как <роль> сделай <действие> в базе <база> чтобы <цель> по START.md».
+# Слот <цель> необязателен: без него формулировка обходится без «чтобы <цель>»,
+# потому что цель нужна не всякой задаче, а форм у отправителя должно быть меньше.
 PROMPT_DB = 'как {role} сделай {action} в базе {db} чтобы {goal} по START.md'
+PROMPT_DB_SHORT = 'как {role} сделай {action} в базе {db} по START.md'
 PROMPT_HARNESS = 'как инженер харнесса сделай {action} чтобы {goal} по START.md'
+PROMPT_HARNESS_SHORT = 'как инженер харнесса сделай {action} по START.md'
 
 
 def project_root(path=None):
@@ -47,12 +51,20 @@ def one_line(text):
 
 
 def build_prompt(role, action, goal, db=None, mode='db'):
-    """Текст задачи в формате контракта. Для mode='harness' слот базы не ставится."""
+    """Текст задачи в формате контракта.
+
+    Для mode='harness' слот базы не ставится. Пустая цель - не ошибка: формулировка
+    тогда заканчивается действием, а не оборванным «чтобы».
+    """
     action = one_line(action)
     goal = one_line(goal)
     if mode == 'harness':
-        return PROMPT_HARNESS.format(role='инженер харнесса', action=action, goal=goal)
-    return PROMPT_DB.format(role=one_line(role), action=action, db=one_line(db), goal=goal)
+        if goal:
+            return PROMPT_HARNESS.format(action=action, goal=goal)
+        return PROMPT_HARNESS_SHORT.format(action=action)
+    if goal:
+        return PROMPT_DB.format(role=one_line(role), action=action, db=one_line(db), goal=goal)
+    return PROMPT_DB_SHORT.format(role=one_line(role), action=action, db=one_line(db))
 
 
 def make_task(role, action, goal, db=None, mode='db', source='cli', deliver='auto',
@@ -70,11 +82,13 @@ def make_task(role, action, goal, db=None, mode='db', source='cli', deliver='aut
         'role': one_line(role),
         'action': one_line(action),
         'db': db,
-        'goal': one_line(goal),
         'prompt': one_line(prompt) or build_prompt(role, action, goal, db, mode),
         'deliver': deliver,
         'timeout_s': int(timeout_s),
     }
+    if one_line(goal):
+        # Пустую цель в задачу не кладём: схема проверяет длину только у присутствующего поля.
+        task['goal'] = one_line(goal)
     if note:
         task['note'] = one_line(note)
     return task
@@ -98,9 +112,11 @@ def normalize_task(raw):
             task[name] = one_line(task[name])
     if task['mode'] == 'harness':
         task['db'] = None
-    if not task.get('prompt') and task.get('action') and task.get('goal'):
+    if not task.get('goal'):
+        task.pop('goal', None)
+    if not task.get('prompt') and task.get('action'):
         task['prompt'] = build_prompt(task.get('role') or 'инженер харнесса',
-                                      task['action'], task['goal'], task.get('db'), task['mode'])
+                                      task['action'], task.get('goal'), task.get('db'), task['mode'])
     if not task.get('deliver'):
         task['deliver'] = 'auto'
     if not task.get('timeout_s'):

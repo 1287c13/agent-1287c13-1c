@@ -257,7 +257,8 @@ else { Bad 'нет каталога skills-vendor - выполните scripts\i
 Head 'Внешняя интеграция (очередь задач)'
 $layerFiles = @('integration\agent.py', 'integration\watcher.py', 'integration\task.py',
     'integration\transport\store.py', 'integration\transport\api.py', 'gui\AgentGUI.py',
-    'deploy\install-local.ps1', 'deploy\config.example.json')
+    'gui\ui_kit.py', 'deploy\install-local.ps1', 'deploy\config.example.json',
+    'scripts\start-watcher.ps1', 'scripts\stop-watcher.ps1')
 $layerMissing = @($layerFiles | Where-Object { -not (Test-Path (Join-Path $Root $_)) })
 if ($layerMissing.Count -eq 0) { Ok 'файлы слоя на месте (агент, watcher, транспорт, окно, установка)' }
 else { Bad "нет файлов внешней интеграции: $($layerMissing -join ', ')" }
@@ -284,13 +285,31 @@ else {
     }
     Ok "очередь queue: журнал $journalBytes байт, inbox $($queueCounts['inbox']), processing $($queueCounts['processing']), outbox $($queueCounts['outbox']), failed $($queueCounts['failed'])"
     $offset = Join-Path $queueDir '.watch_offset'
-    if (-not (Test-Path $offset)) {
-        Warn 'watcher очереди не проходил ни разу: журнал не разбирается (deploy\run-watcher.bat)'
+    $lock = Join-Path $queueDir '.watcher.lock'
+    $marks = @()
+    foreach ($p in @($lock, $offset)) { if (Test-Path $p) { $marks += $p } }
+    if ($marks.Count -eq 0) {
+        Warn 'watcher очереди не проходил ни разу: журнал не разбирается (scripts\start-watcher.ps1)'
     }
     else {
-        $ageSec = [math]::Round(((Get-Date) - (Get-Item $offset).LastWriteTime).TotalSeconds, 0)
-        if ($ageSec -le 60) { Ok "watcher очереди: последний разбор ${ageSec} с назад" }
-        else { Warn "watcher очереди молчит: последний разбор ${ageSec} с назад - задачи не разбираются (deploy\run-watcher.bat)" }
+        # Свежая из двух отметок: замок watcher обновляет каждый проход, позиция журнала -
+        # только при появлении строк, поэтому на простое свежая отметка - замок.
+        $ageSec = 999999
+        foreach ($p in $marks) {
+            $a = [math]::Round(((Get-Date) - (Get-Item $p).LastWriteTime).TotalSeconds, 0)
+            if ($a -lt $ageSec) { $ageSec = $a }
+        }
+        if ($ageSec -le 60) { Ok "watcher очереди: последний проход ${ageSec} с назад" }
+        else { Warn "watcher очереди молчит: последний проход ${ageSec} с назад - задачи не разбираются (scripts\start-watcher.ps1)" }
+    }
+    $watcherPidFile = Join-Path $queueDir 'watcher.pid'
+    if (Test-Path $watcherPidFile) {
+        try {
+            $watcherPid = (Get-Content $watcherPidFile -Raw -Encoding UTF8 | ConvertFrom-Json).pid
+            if ($watcherPid -and (Get-Process -Id $watcherPid -ErrorAction SilentlyContinue)) {
+                Ok "watcher поднят фоном: pid $watcherPid (стоп - scripts\stop-watcher.ps1)"
+            } else { Warn "pid-файл остался от остановленного watcher-а: $watcherPidFile (поднять - scripts\start-watcher.ps1)" }
+        } catch { Warn "pid-файл watcher-а не читается: $watcherPidFile" }
     }
     if (Test-Path (Join-Path $Root '.git')) {
         & git -C $Root check-ignore -q -- 'queue' 2>$null

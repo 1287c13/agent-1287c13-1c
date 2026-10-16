@@ -22,6 +22,11 @@ queue\\failed с причиной.
 Два watcher-а одновременно - ошибка: они разложили бы одну строку дважды. Поэтому
 процесс держит замок queue\\.watcher.lock, обновляя его отметку каждый проход: замок
 живого процесса не снимается, а замок убитого через две минуты можно отобрать.
+
+Watcher живёт до явной остановки: сбой отдельного прохода (битая строка, занятый файл,
+ошибка доставки) не завершает процесс, а пишется в stderr и в queue\\bridge.jsonl
+(событие watcher_error). Остановка - Ctrl+C в своём окне либо scripts\\stop-watcher.ps1,
+если процесс поднят фоном (scripts\\start-watcher.ps1).
 """
 
 import argparse
@@ -29,6 +34,7 @@ import json
 import os
 import sys
 import time
+import traceback
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
@@ -146,6 +152,20 @@ def run_once(store, args):
     return {'accepted': accepted, 'rejected': rejected, 'delivered': delivered}
 
 
+def report_pass_error(store, exc):
+    """Записать сбой прохода в поток и в журнал доставки: watcher не умирает молча."""
+    detail = traceback.format_exc()
+    sys.stderr.write('%s проход не выполнен: %s\n%s' % (now_iso(), exc, detail))
+    sys.stderr.flush()
+    try:
+        store.log_bridge({'event': 'watcher_error',
+                          'error': '%s: %s' % (type(exc).__name__, exc),
+                          'traceback': detail[-2000:]})
+    except Exception:
+        # Журнал недоступен (например, отобрали каталог) - это не повод падать.
+        pass
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         prog='watcher.py',
@@ -185,11 +205,21 @@ def main(argv=None):
     passes = 0
     try:
         while True:
-            result = run_once(store, args)
-            lock.touch()
-            passes += 1
-            if not args.quiet and (result['accepted'] or result['delivered'] or result['rejected']):
-                print('%s проход %s: %s' % (now_iso(), passes, json.dumps(result, ensure_ascii=False)))
+            try:
+                result = run_once(store, args)
+                lock.touch()
+                passes += 1
+                if not args.quiet and (result['accepted'] or result['delivered'] or result['rejected']):
+                    print('%s проход %s: %s' % (now_iso(), passes, json.dumps(result, ensure_ascii=False)))
+            except KeyboardInterrupt:
+                raise
+            except Exception as exc:
+                # Сбой одного прохода не завершает watcher: задача, отправленная из окна,
+                # иначе молча остаётся в журнале. Процесс живёт, пока его не погасят явно.
+                report_pass_error(store, exc)
+                if not os.path.isfile(lock.path) and not lock.acquire():
+                    print('замок %s перехвачен другим watcher-ом: останавливаюсь' % lock.path)
+                    return 1
             time.sleep(max(0.2, args.interval))
     except KeyboardInterrupt:
         print('остановлено: проходов %s' % passes)

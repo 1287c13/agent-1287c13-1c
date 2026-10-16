@@ -65,13 +65,17 @@ if (-not (Test-Path $configPath)) {
 if (-not $NoShortcuts) {
     $shell = New-Object -ComObject WScript.Shell
     $desktop = [Environment]::GetFolderPath('Desktop')
+    # Ярлык watcher-а ведёт на скрипт, а не на .bat: скрипт поднимает watcher фоном
+    # (окно консоли не нужно) и сам проверяет, что процесс взял замок очереди.
     $targets = @(
-        @{ Name = 'Агент 1С - окно задач'; File = 'run-gui.bat' },
-        @{ Name = 'Агент 1С - watcher очереди'; File = 'run-watcher.bat' }
+        @{ Name = 'Агент 1С - окно задач'; Target = (Join-Path $Root 'deploy\run-gui.bat'); Args = '' },
+        @{ Name = 'Агент 1С - watcher очереди'; Target = 'powershell.exe'
+           Args = '-NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $Root 'scripts\start-watcher.ps1') + '"' }
     )
     foreach ($item in $targets) {
         $link = $shell.CreateShortcut((Join-Path $desktop ($item.Name + '.lnk')))
-        $link.TargetPath = (Join-Path $Root ('deploy\' + $item.File))
+        $link.TargetPath = $item.Target
+        $link.Arguments = $item.Args
         $link.WorkingDirectory = $Root
         $link.Save()
         Write-Host "ярлык: $($item.Name)"
@@ -80,6 +84,6 @@ if (-not $NoShortcuts) {
 
 Write-Host ''
 Write-Host 'Дальше:'
-Write-Host '  1) deploy\run-watcher.bat - оставить окно открытым (разбор очереди и передача задач)'
+Write-Host '  1) scripts\start-watcher.ps1 - поднять watcher очереди фоном (живёт до scripts\stop-watcher.ps1)'
 Write-Host '  2) deploy\run-gui.bat - поставить задачу и прочитать результат'
 Write-Host '  3) интеграция из 1С: POST /api/task или строка в queue\tasks.jsonl - docs\07-external-integration.md'

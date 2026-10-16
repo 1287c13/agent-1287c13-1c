@@ -4,7 +4,7 @@
   "description": "Одна задача: строка журнала queue\\tasks.jsonl, файл queue\\inbox\\task_<id>.json. Проверяет integration\\transport\\schema.py.",
   "type": "object",
   "additionalProperties": true,
-  "required": ["id", "created_at", "source", "mode", "role", "action", "goal", "prompt"],
+  "required": ["id", "created_at", "source", "mode", "role", "action", "prompt"],
   "properties": {
     "id": {
       "type": "string",
@@ -35,7 +35,7 @@
       "type": "string",
       "minLength": 2,
       "maxLength": 120,
-      "description": "Роль: программист 1С, тестировщик, аналитик, администратор, инженер харнесса."
+      "description": "Роль: программист 1С, тестировщик, аналитик, администратор, инженер харнесса. Роль задаёт и вид задачи: «инженер харнесса» - задача по харнессу (mode=harness), остальные - по базе."
     },
     "action": {
       "type": "string",
@@ -52,13 +52,13 @@
       "type": "string",
       "minLength": 2,
       "maxLength": 2000,
-      "description": "Критерий готовности - слот <цель>; из него строится строка «Проверка»."
+      "description": "Необязательный критерий готовности - слот <цель>. Если поле не заполнено, его в задаче нет, а формулировка обходится без «чтобы <цель>»; из цели строится строка «Проверка»."
     },
     "prompt": {
       "type": "string",
       "minLength": 8,
       "maxLength": 4000,
-      "description": "Готовая формулировка контракта одной строкой: как <роль> сделай <действие> [в базе <база>] чтобы <цель> по START.md."
+      "description": "Готовая формулировка контракта одной строкой: как <роль> сделай <действие> [в базе <база>] [чтобы <цель>] по START.md."
     },
     "deliver": {
       "type": "string",
