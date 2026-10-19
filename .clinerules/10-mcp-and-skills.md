@@ -17,7 +17,7 @@
 | Как писать BSL по стандартам, строгая типизация | справка платформы | MCP `1c-platform-help` |
 | Формат объекта метаданных, сборка/разбор XML, валидация | скиллы | `.cline\skills\*` |
 | Gherkin/Vanessa, сценарии автотестов | скиллы | `.cline\skills\va-*`, `vanessa-*` |
-| Задача пришла из внешней очереди (`queue\`, доставка URI) | файлы проекта + живая база | файл ответа в `queue\answers\`, затем `py -3 integration\agent.py --write-result`; `docs\07-external-integration.md` |
+| Задача пришла из внешней очереди (очередь на сервере, доставка URI) | файлы проекта + живая база | файл ответа `temp\queue\<id>\answer.md`, затем `py -3 integration\agent.py --write-result`; `docs\07-external-integration.md` |
 | Прогнать Gherkin-сценарий в базе (только если этого требует задача) | скрипты харнесса + живая база | `scripts\vanessa-run.ps1` (Vanessa - внешняя обработка платформы, в конфигурацию не ставится; обработку разворачивает сам, сеанс toolkit освобождает ключом `-FreeToolkit`); предпосылки - `.clinerules\40-lessons.md`, п.12 |
 | Свойства конкретной информационной базы (путь, платформа) | файлы проекта | `.v8-project.json` |
 | Список репозиториев индекса и их состояние | файлы проекта + скрипты харнесса | `.cline\mcp\code-index-mcp\home\daemon.toml` (алиасы) и `scripts\check-harness.ps1` (статусы из `/health` демона); не вызовом `get_stats` |

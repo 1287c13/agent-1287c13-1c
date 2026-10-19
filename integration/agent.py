@@ -1,44 +1,41 @@
 # -*- coding: utf-8 -*-
-"""Агент очереди: взять задачу, доставить в Cline, принять и записать результат.
+"""Командная строка агента: поставить задачу, записать результат, прочитать состояние.
 
 Роли файла:
 
-    --process      взять самую старую задачу из queue\\inbox, доставить её в Cline
-                   выбранным режимом и записать в outbox итог «delivered» (задача
-                   передана, ответ ждёт записи);
-    --run          то же в цикле плюс разбор застрявших задач (--sweep);
-    --prepare      создать файл ответа со скелетом полей для конкретной задачи;
-    --write-result записать итог задачи из файла ответа (это делает Cline, выполнив
-                   задачу: файл ответа и команда записи описаны в docs\07-external-integration.md);
-    --redeliver    открыть задачу из очереди в Cline заново: доставка не подтвердилась;
-    --render-answer ответ задачи в HTML: markdown агента превращается в страницу .html;
-
-    --sweep        пометить задачи, по которым результат не записан дольше timeout_s;
-    --list         показать, что лежит в очереди.
+    --submit        поставить задачу на сервер (слоты контракта -> POST /api/task);
+    --write-result  записать итог задачи из файла ответа (это делает Cline, выполнив
+                    задачу: файл ответа и команда записи описаны в
+                    docs\\07-external-integration.md);
+    --prepare       создать файл ответа со скелетом полей для задачи;
+    --status        состояние задачи: стадия, подсказка, время;
+    --answer        ответ задачи: markdown или страница HTML;
+    --list          последние задачи очереди;
+    --health        состояние сервера: счётчики и агенты.
 
 Почему результат пишет отдельный вызов: Cline работает в другом процессе, и очередь
-для него - внешний объект. Обратный путь устроен так же, как прямой: файл ответа плюс
-одна команда, которая превращает его в результат для GUI. Итог всегда проходит через
-integration\\task.py (схема result_schema.json), поэтому отправитель получает ответ
-одной формы, а не текст, зависящий от режима доставки.
+для него - внешний объект на сервере. Обратный путь устроен так же, как прямой: файл
+ответа плюс одна команда, которая отправляет его на сервер. Итог проходит через
+POST /api/agent/result, поэтому отправитель получает ответ одной формы, а не текст,
+зависящий от режима доставки.
+
+Локально файл ответа живёт в рабочем каталоге задачи temp\\queue\\<id>\\answer.md;
+после записи результата watcher этот каталог удаляет. Каталога очереди на машине
+агента нет: очередь одна и она на сервере.
 """
 
 import argparse
 import json
 import os
 import sys
-import time
-from datetime import datetime
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
-import bridge  # noqa: E402
-import md_to_html  # noqa: E402
-from task import errors_to_text, make_task, project_root, validate_task  # noqa: E402
-from transport.schema import read_schema, validate  # noqa: E402
-from transport.store import QueueStore, now_iso, read_json, setup_stdio, write_text_atomic  # noqa: E402
+from transport.client import ClientError, IntegrationClient  # noqa: E402
+from transport.config import agent_name, load_config, project_root  # noqa: E402
+from transport.store import setup_stdio, write_text_atomic  # noqa: E402
 
 ANSWER_LABELS = (
     ('Слой', 'layer'),
@@ -68,12 +65,14 @@ MCP:
 
 def answer_skeleton(task):
     """Скелет файла ответа: те же четыре строки преамбулы и три строки отчёта."""
-    return ANSWER_SKELETON % {'id': task['id'], 'prompt': task.get('prompt') or ''}
+    return ANSWER_SKELETON % {'id': task.get('id') or '', 'prompt': task.get('prompt') or ''}
 
 
-def prepare_answer(store, task):
-    """Создать файл ответа, если его ещё нет. Существующий файл не перезаписывается."""
-    path = store.answer_path(task['id'])
+def prepare_answer_file(work_dir, task):
+    """Создать файл ответа в рабочем каталоге задачи. Существующий не перезаписывается."""
+    if not os.path.isdir(work_dir):
+        os.makedirs(work_dir)
+    path = os.path.join(work_dir, 'answer.md')
     if not os.path.isfile(path):
         write_text_atomic(path, answer_skeleton(task))
     return path
@@ -87,363 +86,262 @@ def parse_answer_text(text):
     метки, поэтому заполненная строка может стоять ниже.
     """
     fields = {}
-    body = []
     for line in (text or '').splitlines():
-        matched = False
         for label, key in ANSWER_LABELS:
             head = label + ':'
             if line.strip().startswith(head):
                 value = line.strip()[len(head):].strip()
                 if value and not fields.get(key):
                     fields[key] = value
-                matched = True
                 break
-        if not matched:
-            body.append(line)
     fields['answer'] = (text or '').strip()
     return fields
 
 
-def build_result(task, status, store, delivery=None, fields=None, message=''):
-    """Собрать итог задачи по схеме result_schema.json."""
-    delivery = delivery or {}
-    fields = fields or {}
-    result = {
-        'task_id': task['id'],
-        'status': status,
-        'written_at': now_iso(),
-        'started_at': task.get('_started_at') or '',
-        'prompt_file': delivery.get('prompt_file') or '',
-        'answer_file': delivery.get('answer_file') or store.rel(store.answer_path(task['id'])),
-        'answer': fields.get('answer') or message or 'ответ не записан',
-        'message': message,
-    }
-    if delivery.get('mode'):
-        result['delivery'] = delivery['mode']
-    for key in ('layer', 'mcp', 'skills', 'verification', 'done', 'not_verified'):
-        if fields.get(key):
-            result[key] = fields[key]
-    started = task.get('_started_ts')
-    if started:
-        result['duration_s'] = round(max(0.0, time.time() - started), 1)
-    return result
-
-
-def check_result(store, result):
-    """Проверить итог по схеме. Ошибки возвращаются списком, запись не отменяется."""
-    schema = read_schema(os.path.join(store.root, 'integration', 'schemas', 'result_schema.json'))
-    return validate(result, schema, 'результат')
-
-
-def cline_work_dir(store):
+def cline_work_dir(root):
     """Каталог копий базы Cline: подтверждение доставки читает копию, не оригинал."""
-    path = os.path.join(store.root, 'temp', 'cline-db')
+    path = os.path.join(root, 'temp', 'cline-db')
     if not os.path.isdir(path):
         os.makedirs(path)
     return path
 
 
-def process_once(store, deliver_mode='uri', allow_gui=True, confirm_timeout=None, attempts=3):
-    """Взять одну задачу из inbox, доставить в Cline и записать итог «delivered»."""
-    task = store.claim()
-    if task is None:
-        return None
-    source = store.task_path('processing', task['id'])
-    task['_started_at'] = now_iso()
-    task['_started_ts'] = time.time()
-    mode = deliver_mode
-    if task.get('deliver') and task['deliver'] != 'auto' and deliver_mode == 'auto':
-        mode = task['deliver']
-    prepare_answer(store, task)
-    delivery = bridge.deliver(task, mode, store, allow_gui=allow_gui, attempts=attempts,
-                              confirm_timeout=confirm_timeout,
-                              cline_work_dir=cline_work_dir(store))
-    status = 'delivered' if delivery.get('status') == 'delivered' else 'error'
-    result = build_result(task, status, store, delivery, message=delivery.get('message') or '')
-    result['delivered_at'] = now_iso()
-    problems = check_result(store, result)
-    if problems:
-        result['schema_errors'] = problems
-    store.complete(result)
-    return result
+def work_dir_for(root, task_id):
+    """Рабочий каталог задачи на машине агента."""
 
 
-def sweep(store, timeout_s=None):
-    """Задачи в processing без результата дольше timeout_s: пометить как timeout."""
-    stale = store.stale_processing(timeout_s or 0)
-    done = []
-    for task_id, age, path in stale:
-        try:
-            task = read_json(path)
-        except (ValueError, OSError):
-            continue
-        limit = int(task.get('timeout_s') or 0)
-        if limit and age < limit:
-            continue
-        task['_started_ts'] = time.time() - age
-        task['_started_at'] = datetime.fromtimestamp(time.time() - age).strftime('%Y-%m-%dT%H:%M:%S')
-        result = build_result(task, 'timeout', store, {},
-                              message='результат не записан за %.0f с; задача помечена timeout' % age)
-        store.complete(result)
-        done.append(result)
-    return done
+def make_client(cfg, args):
+    """Клиент по настройкам и ключам командной строки."""
+    url = args.server or cfg['agent']['server_url']
+    key = args.key if args.key is not None else cfg['agent']['key']
+    if not url:
+        raise SystemExit('не задан адрес сервера: agent.server_url в deploy\\config.json '
+                         'или ключ --server')
+    if not key:
+        raise SystemExit('не задан ключ доступа: agent.key в deploy\\config.json '
+                         'или ключ --key')
+    return IntegrationClient(url, key)
 
 
-def write_result(store, task_id, answer_path=None, status='done', message='', quiet=False):
-    """Записать итог задачи: из файла ответа."""
-    path = answer_path or store.answer_path(task_id)
+def print_status(item):
+    """Строка состояния задачи для человека."""
+    if not item:
+        print('задачи нет')
+        return
+    print('задача:   %s' % item.get('task_id'))
+    print('стадия:   %s - %s' % (item.get('state'), item.get('wait_hint') or ''))
+    print('создана:  %s, в работе %s с' % (item.get('created_at'), item.get('elapsed_s')))
+    if item.get('agent'):
+        print('агент:    %s' % item.get('agent'))
+    print('клиент:   %s, режим %s, база %s' % (item.get('client'), item.get('mode'),
+                                              item.get('db') or '-'))
+    print('задача:   %s' % (item.get('prompt') or ''))
+    if item.get('message'):
+        print('пояснение: %s' % item.get('message'))
+    for step in item.get('progress') or []:
+        print('  %s  %-10s %s' % (step.get('at'), step.get('stage'), step.get('message') or ''))
+
+
+def cmd_submit(client, args):
+    """Поставить задачу на сервер."""
+    if not args.action:
+        raise SystemExit('--submit требует --action <что нужно сделать>; '
+                         'слот <цель> (--goal) необязателен')
+    payload = {
+        'role': args.role,
+        'action': args.action,
+        'goal': args.goal,
+        'mode': args.mode,
+        'deliver': args.deliver,
+        'timeout_s': args.timeout,
+        'note': args.note,
+    }
+    if args.mode == 'db':
+        payload['db'] = args.db
+    response = client.submit(payload)
+    print('задача поставлена: %s' % response.get('task_id'))
+    print('формулировка: %s' % response.get('prompt'))
+    print('состояние: %s' % response.get('state'))
+    return 0
+
+
+def cmd_write_result(client, cfg, args, root):
+    """Записать итог задачи из файла ответа."""
+    path = args.file or os.path.join(work_dir_for(root, args.task), 'answer.md')
     if not os.path.isfile(path):
         raise SystemExit('файл ответа не найден: %s' % path)
     with open(path, 'r', encoding='utf-8') as f:
         text = f.read()
-    task = {'id': task_id}
-    source = store.task_path('processing', task_id)
-    if os.path.isfile(source):
-        try:
-            task = read_json(source)
-        except (ValueError, OSError):
-            task = {'id': task_id}
-        task['_started_ts'] = os.path.getmtime(source)
-        task['_started_at'] = datetime.fromtimestamp(task['_started_ts']).strftime('%Y-%m-%dT%H:%M:%S')
     fields = parse_answer_text(text)
-    previous = store.result(task_id) or {}
-    result = build_result(task, status, store, {}, fields=fields, message=message)
-    result['answer_file'] = store.rel(path)
-    # Доставка уже отмечена в итоге, записанном при передаче задачи: сохраняем её,
-    # иначе окончательный результат терял бы режим доставки и время передачи.
-    for key in ('delivery', 'prompt_file', 'delivered_at', 'started_at', 'duration_s'):
-        if not result.get(key) and previous.get(key):
-            result[key] = previous[key]
-    if not result.get('started_at'):
-        result.pop('started_at', None)
-    problems = check_result(store, result)
-    if problems:
-        result['schema_errors'] = problems
-    store.complete(result)
-    if not quiet:
-        print('результат записан: %s' % store.rel(store.result_path(task_id)))
-        print('статус: %s' % status)
-    return result
+    response = client.result(args.task, agent_name(cfg), args.status, text,
+                             {key: fields.get(key) for key in
+                              ('layer', 'mcp', 'skills', 'verification', 'done', 'not_verified')
+                              if fields.get(key)},
+                             args.message)
+    print('результат записан: %s, состояние %s' % (args.task, response.get('state')))
+    if response.get('duration_s') is not None:
+        print('в работе: %s с' % response.get('duration_s'))
+    return 0
+
+    return os.path.join(root, 'temp', 'queue', task_id)
 
 
-def redeliver(store, task_id, allow_gui=True, confirm_timeout=None, attempts=3):
-    """Открыть задачу в Cline заново: доставка не подтвердилась, ссылка потерялась.
-
-    Задача берётся из очереди или архива, а результат не переписывается целиком:
-    обновляются только поля доставки. Иначе ответ, уже записанный по задаче, снова
-    стал бы «ждём ответа».
-    """
-    task = load_task(store, task_id)
-    if not task.get('prompt') and not task.get('action'):
-        raise SystemExit('задача %s не найдена в очереди и в архиве' % task_id)
-    delivery = bridge.deliver(task, 'uri', store, allow_gui=allow_gui, attempts=attempts,
-                              confirm_timeout=confirm_timeout,
-                              cline_work_dir=cline_work_dir(store))
-    previous = store.result(task_id)
-    if previous:
-        for key in ('delivery', 'delivered_at', 'message', 'prompt_file', 'answer_file',
-                    'attempts', 'confirmed', 'cline_session', 'cline_note', 'uri'):
-            if delivery.get(key):
-                previous[key] = delivery[key]
-        previous['attempts'] = delivery.get('attempts') or previous.get('attempts')
-        previous['confirmed'] = bool(delivery.get('confirmed'))
-        if previous.get('status') in ('delivered', 'error', 'timeout'):
-            previous['status'] = delivery.get('status') or previous['status']
-        previous['written_at'] = now_iso()
-        store.complete(previous)
-    return delivery
+def cmd_prepare(client, args, root):
+    """Создать файл ответа со скелетом для задачи."""
+    item = client.status(args.task)
+    path = prepare_answer_file(work_dir_for(root, args.task), item)
+    print('файл ответа: %s' % path)
+    return 0
 
 
-def render_answer(store, task_id, path=None, quiet=False):
-    """Ответ задачи в HTML: markdown агента превращается в страницу для скачивания."""
-    source = store.answer_path(task_id)
-    if not os.path.isfile(source):
-        raise SystemExit('файл ответа не найден: %s' % source)
-    with open(source, 'r', encoding='utf-8') as f:
-        text = f.read()
-    target = path or os.path.join(store.dirs['answers'],
-                                  md_to_html.answer_file_name(task_id))
-    md_to_html.write_file(target, text, title='Ответ задачи %s' % task_id,
-                          source='файл ответа: %s' % store.rel(source))
-    if not quiet:
-        print('страница ответа: %s' % store.rel(target))
-    return target
+def cmd_status(client, args):
+    """Показать состояние задачи."""
+    print_status(client.status(args.task))
+    return 0
 
 
-def describe_queue(store, limit=20):
-    """Состояние очереди: счётчики и последние итоги."""
-    counts = store.counts()
-    print('каталог очереди: %s' % store.base)
-    print('журнал: %s байт, прочитано watcher-ом до байта %s' % (
-        counts['journal_bytes'], counts['watch_offset']))
-    age = counts['watcher_age_s']
-    print('watcher: %s' % ('отметки нет' if age is None else 'последний проход %.1f с назад' % age))
-    print('inbox=%s processing=%s outbox=%s archive=%s failed=%s' % (
-        counts['inbox'], counts['processing'], counts['outbox'],
-        counts['archive'], counts['failed']))
-    results = store.recent_results(limit)
-    if results:
-        print('последние итоги:')
-        for item in results:
-            print('  %s  %-10s %s' % (item.get('task_id'), item.get('status'),
-                                      (item.get('message') or '')[:60]))
-    return counts
-
-
-def load_task(store, task_id):
-    """Найти задачу по идентификатору в processing, inbox или archive."""
-    for folder in ('processing', 'inbox', 'archive'):
-        path = store.task_path(folder, task_id)
-        if os.path.isfile(path):
-            try:
-                return read_json(path)
-            except (ValueError, OSError):
-                break
-    return {'id': task_id, 'prompt': ''}
-
-
-def emit(result, as_json):
-    """Печать итога: компактная строка для человека или полный JSON для проверок."""
-    if result is None:
-        print('очередь пуста: задач в inbox нет')
-        return
-    if as_json:
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+def cmd_answer(client, args, root):
+    """Ответ задачи: markdown печатается, HTML сохраняется файлом."""
+    kind = 'html' if args.html else 'md'
+    response = client.answer(args.task, kind)
+    content = response.get('content') or ''
+    if args.out:
+        target = args.out
+    elif kind == 'html':
+        folder = os.path.join(root, 'temp')
+        if not os.path.isdir(folder):
+            os.makedirs(folder)
+        target = os.path.join(folder, response.get('file_name') or ('answer_%s.html' % args.task))
     else:
-        print('задача %s: %s (%s)' % (result.get('task_id'), result.get('status'),
-                                      result.get('message') or ''))
+        print(content)
+        return 0
+    with open(target, 'w', encoding='utf-8', newline='\r\n') as f:
+        f.write(content)
+    print('ответ: %s' % target)
+    return 0
+
+
+def cmd_list(client, args):
+    """Последние задачи очереди."""
+    data = client.history(args.limit)
+    counts = data.get('counts') or {}
+    print('очередь: ждут %s, в работе %s, готово %s, сбоев %s, агентов живо %s'
+          % (counts.get('queued'), counts.get('processing'), counts.get('done'),
+             counts.get('failed'), counts.get('agents_alive')))
+    for item in data.get('items') or []:
+        print('  %s  %-9s %-18s %s' % (item.get('task_id'), item.get('state'),
+                                       item.get('agent') or '-',
+                                       (item.get('prompt') or '')[:70]))
+    return 0
+
+
+def cmd_health(client):
+    """Состояние сервера."""
+    data = client.health()
+    queue = data.get('queue') or {}
+    print('сервер: %s, версия %s' % (data.get('status'), data.get('version')))
+    print('очередь: ждут %s, в работе %s, готово %s, сбоев %s'
+          % (queue.get('queued'), queue.get('processing'), queue.get('done'),
+             queue.get('failed')))
+    for item in data.get('agents') or []:
+        print('агент %s: %s, задача %s, отметка %s с назад%s'
+              % (item.get('name'), item.get('state'), item.get('task_id') or '-',
+                 item.get('age_s'), '' if item.get('alive') else ' (молчит)'))
+    for note in data.get('notes') or []:
+        print('настройки: %s' % note)
+    return 0
 
 
 def build_parser():
     parser = argparse.ArgumentParser(
         prog='agent.py',
-        description='Агент очереди интеграции: доставка задач в Cline и запись результатов.')
+        description='Командная строка интеграции: задачи, результаты и состояние очереди.')
     parser.add_argument('--root', default=None,
                         help='корень харнесса (по умолчанию - каталог выше integration)')
-    parser.add_argument('--deliver', default='uri', choices=('uri', 'manual', 'echo', 'auto'),
-                        help='режим доставки: uri (по умолчанию), manual, echo, auto')
-    parser.add_argument('--confirm-timeout', type=float, default=None,
-                        help='сколько секунд ждать подтверждения доставки (по умолчанию 12)')
-    parser.add_argument('--attempts', type=int, default=3,
-                        help='сколько раз открывать ссылку, пока задача не появится в Cline')
-    parser.add_argument('--no-gui', action='store_true',
-                        help='не открывать URI в оболочке Windows (проверка цепочки без Cline)')
-    parser.add_argument('--process', action='store_true', help='взять одну задачу из inbox и доставить её')
-    parser.add_argument('--run', action='store_true', help='цикл: доставка задач и разбор застрявших')
-    parser.add_argument('--interval', type=float, default=2.0, help='пауза между проходами цикла, с')
-    parser.add_argument('--prepare', action='store_true', help='создать файл ответа для задачи --task')
-    parser.add_argument('--write-result', action='store_true', help='записать итог задачи из файла ответа')
-    parser.add_argument('--redeliver', action='store_true',
-                        help='открыть задачу --task в Cline заново (доставка не подтвердилась)')
-    parser.add_argument('--render-answer', action='store_true',
-                        help='ответ задачи --task в HTML: файл .html рядом с .md')
-    parser.add_argument('--html', default=None, help='куда положить страницу ответа (по умолчанию - queue\\answers)')
-    parser.add_argument('--task', default=None, help='идентификатор задачи: t-...')
-    parser.add_argument('--file', default=None, help='файл ответа (по умолчанию queue\\answers\\answer_<id>.md)')
-    parser.add_argument('--status', default='done', choices=('done', 'error'), help='статус итога при --write-result')
-    parser.add_argument('--message', default='', help='короткое пояснение к итогу')
-    parser.add_argument('--sweep', action='store_true', help='пометить застрявшие задачи как timeout')
-    parser.add_argument('--timeout', type=float, default=None, help='порог застревания, с')
-    parser.add_argument('--list', action='store_true', help='показать состояние очереди')
-    parser.add_argument('--limit', type=int, default=20, help='сколько последних итогов показать')
-    parser.add_argument('--json', action='store_true', help='печатать результат как JSON')
-    parser.add_argument('--quiet', action='store_true', help='печатать только суть')
-    parser.add_argument('--submit', action='store_true',
-                        help='поставить задачу из командной строки: нужен --action; --goal необязателен')
-    parser.add_argument('--role', default='программист 1С', help='роль для --submit (роль задаёт и режим задачи)')
-    parser.add_argument('--action', default=None, help='слот <действие> для --submit')
-    parser.add_argument('--goal', default=None, help='слот <цель> для --submit (необязателен)')
-    parser.add_argument('--db', default=None, help='слот <база> для --submit')
-    parser.add_argument('--mode', default='db', choices=('db', 'harness'), help='режим задачи для --submit')
-    parser.add_argument('--source', default='cli', choices=('cli', 'gui', 'http', 'file'),
-                        help='отправитель задачи для --submit')
+    parser.add_argument('--config', default=None, help='файл настроек (deploy\\config.json)')
+    parser.add_argument('--server', default=None, help='адрес сервера (agent.server_url)')
+    parser.add_argument('--key', default=None, help='ключ доступа (agent.key)')
+    parser.add_argument('--task', default=None, help='идентификатор задачи')
+    parser.add_argument('--file', default=None, help='файл ответа для --write-result')
+    parser.add_argument('--status', default='done',
+                        choices=('done', 'error', 'failed'),
+                        help='статус результата для --write-result')
+    parser.add_argument('--message', default='', help='пояснение к результату')
+    parser.add_argument('--json', action='store_true', help='печатать ответ сервера как JSON')
+
+    parser.add_argument('--submit', action='store_true', help='поставить задачу')
+    parser.add_argument('--role', default='программист 1С', help='слот <роль>')
+    parser.add_argument('--action', default=None, help='слот <действие>')
+    parser.add_argument('--goal', default=None, help='слот <цель> (необязателен)')
+    parser.add_argument('--db', default=None, help='слот <база>')
+    parser.add_argument('--mode', default='db', choices=('db', 'harness'),
+                        help='db - задача по базе, harness - по инструменту агента')
+    parser.add_argument('--deliver', default='auto',
+                        choices=('uri', 'manual', 'echo', 'auto'),
+                        help='режим доставки в Cline')
+    parser.add_argument('--timeout', type=int, default=1800,
+                        help='сколько секунд ждать результат (по умолчанию 1800)')
+    parser.add_argument('--note', default=None, help='пометка отправителя')
+
+    parser.add_argument('--prepare', action='store_true', help='создать файл ответа')
+    parser.add_argument('--write-result', action='store_true', help='записать итог задачи')
+    parser.add_argument('--status-task', dest='status_task', action='store_true',
+                        help='показать состояние задачи')
+    parser.add_argument('--answer', dest='answer', action='store_true', help='скачать ответ')
+    parser.add_argument('--html', action='store_true', help='ответ страницей HTML')
+    parser.add_argument('--out', default=None, help='файл для --answer')
+    parser.add_argument('--list', action='store_true', help='последние задачи')
+    parser.add_argument('--limit', type=int, default=20, help='сколько задач в --list')
+    parser.add_argument('--health', action='store_true', help='состояние сервера')
     return parser
 
 
 def main(argv=None):
     setup_stdio()
-    args = build_parser().parse_args(argv)
-    root = args.root or project_root()
-    store = QueueStore(root)
-    store.ensure()
-    acted = False
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    root = project_root(args.root)
+    cfg, notes = load_config(root, args.config)
+    if args.server:
+        cfg['agent']['server_url'] = args.server
+    if args.key:
+        cfg['agent']['key'] = args.key
 
-    if args.submit:
-        if not args.action:
-            raise SystemExit('--submit требует --action <что нужно сделать>; '
-                             'слот <цель> (--goal) необязателен')
-        task = make_task(args.role, args.action, args.goal, args.db, args.mode,
-                         source=args.source, deliver=args.deliver)
-        task, errors = validate_task(root, task)
-        if errors:
-            print(errors_to_text(task, errors))
-            return 1
-        store.append_journal(task)
-        print('задача отправлена: %s' % task['id'])
-        print('формулировка: %s' % task['prompt'])
-        print('журнал: %s' % store.rel(store.dirs['journal']))
-        acted = True
-
-    if args.prepare:
-        if not args.task:
-            raise SystemExit('--prepare требует --task <идентификатор>')
-        task = load_task(store, args.task)
-        path = prepare_answer(store, task)
-        print('файл ответа: %s' % store.rel(path))
-        acted = True
-
-    if args.write_result:
-        if not args.task:
-            raise SystemExit('--write-result требует --task <идентификатор>')
-        result = write_result(store, args.task, args.file, args.status, args.message, args.quiet)
-        if args.json:
-            print(json.dumps(result, ensure_ascii=False, indent=2))
-        acted = True
-
-    if args.redeliver:
-        if not args.task:
-            raise SystemExit('--redeliver требует --task <идентификатор>')
-        delivery = redeliver(store, args.task, not args.no_gui, args.confirm_timeout,
-                             args.attempts)
-        print('доставка: %s' % delivery.get('status'))
-        print('подтверждение: %s' % ('да, сессия %s' % delivery.get('cline_session')
-                                     if delivery.get('confirmed') else 'нет'))
-        print('пояснение: %s' % (delivery.get('message') or ''))
-        acted = True
-
-    if args.render_answer:
-        if not args.task:
-            raise SystemExit('--render-answer требует --task <идентификатор>')
-        render_answer(store, args.task, args.html, args.quiet)
-        acted = True
-
-    if args.sweep:
-        marked = sweep(store, args.timeout)
-        print('помечено timeout: %s' % len(marked))
-        acted = True
-
-    if args.run:
-        print('цикл агента: режим %s, интервал %.1f с (прерывание - Ctrl+C)' % (args.deliver, args.interval))
-        acted = True
-        try:
-            while True:
-                emit(process_once(store, args.deliver, not args.no_gui, args.confirm_timeout,
-                                  args.attempts), args.json)
-                sweep(store, args.timeout)
-                time.sleep(args.interval)
-        except KeyboardInterrupt:
-            print('остановлено')
-        return 0
-
-    if args.process:
-        emit(process_once(store, args.deliver, not args.no_gui, args.confirm_timeout,
-                          args.attempts), args.json)
-        acted = True
-
-    if args.list or not acted:
-        describe_queue(store, args.limit)
-    return 0
+    try:
+        client = make_client(cfg, args)
+        if args.submit:
+            return cmd_submit(client, args)
+        if args.write_result:
+            if not args.task:
+                raise SystemExit('--write-result требует --task <идентификатор>')
+            return cmd_write_result(client, cfg, args, root)
+        if args.prepare:
+            if not args.task:
+                raise SystemExit('--prepare требует --task <идентификатор>')
+            return cmd_prepare(client, args, root)
+        if args.status_task:
+            if not args.task:
+                raise SystemExit('--status-task требует --task <идентификатор>')
+            return cmd_status(client, args)
+        if args.answer:
+            if not args.task:
+                raise SystemExit('--answer требует --task <идентификатор>')
+            return cmd_answer(client, args, root)
+        if args.list:
+            return cmd_list(client, args)
+        if args.health:
+            return cmd_health(client)
+        print('не задано действие: --submit, --write-result, --prepare, --status-task, '
+              '--answer, --list, --health')
+        for note in notes:
+            print('настройки: %s' % note)
+        return 1
+    except ClientError as exc:
+        print('ошибка интеграции: %s' % exc)
+        return 1
 
 
 if __name__ == '__main__':
     sys.exit(main())
+
+

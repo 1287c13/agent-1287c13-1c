@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Результат задачи внешней интеграции (integration-v1)",
-  "description": "Файл queue\\outbox\\result_<id>.json: то, что читает GUI и внешний клиент. Пишет integration\\agent.py.",
+  "description": "Файл outbox\\result_<id>.json на сервере: то, что читает страница задач и внешний клиент. Пишет сервер по POST /api/agent/result.",
   "type": "object",
   "additionalProperties": true,
   "required": ["task_id", "status", "written_at", "answer"],
@@ -13,8 +13,8 @@
     },
     "status": {
       "type": "string",
-      "enum": ["done", "error", "timeout", "delivered"],
-      "description": "done - работа выполнена и проверена; error - задача не выполнена; timeout - результат не записан за timeout_s; delivered - задача передана в Cline, ответ ждёт записи."
+      "enum": ["done", "error", "timeout", "failed", "delivered"],
+      "description": "done - работа выполнена и проверена; error - сбой доставки или задача не выполнена; failed - попытки агента кончились; timeout - результат не записан за timeout_s; delivered - устаревшее значение совместимости."
     },
     "written_at": {
       "type": "string",

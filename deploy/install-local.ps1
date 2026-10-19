@@ -1,12 +1,15 @@
 ﻿<#
 .SYNOPSIS
-    Локальная установка внешней интеграции: проверка окружения, каталог очереди, ярлыки.
+    Локальная установка внешней интеграции: проверка окружения, настройки, ярлык watcher-а.
 
 .DESCRIPTION
     Скрипт ничего не публикует и не меняет правила харнесса. Он проверяет, что на машине
-    есть python и tkinter, создаёт каталоги очереди (queue\ в корне харнесса), кладёт
-    deploy\config.json из примера и по ключу -Shortcuts делает ярлыки на рабочем столе
-    для окна задач и watcher-а.
+    есть python 3 и файлы сервера (страница задач, точка входа Passenger), кладёт
+    deploy\config.json из образца и по ключу -Shortcuts делает ярлык на рабочем столе
+    для watcher-а очереди.
+
+    Каталог очереди создаётся самим сервером (QueueStore.ensure) при первом запросе -
+    заранее его заводить не нужно: очередь живёт там, где указано server.root.
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File deploy\install-local.ps1
@@ -40,19 +43,18 @@ if (-not (Test-Python)) {
 }
 Write-Host 'python: ok'
 
-$tk = & py -3 -c "import tkinter; print('tkinter', tkinter.TkVersion)" 2>&1
-if ($LASTEXITCODE -ne 0) {
-    Write-Warning 'tkinter недоступен: окно задач (deploy\run-gui.bat) работать не будет, очередь и HTTP - будут'
-} else {
-    Write-Host "$tk: ok"
+$required = @(
+    'integration\agent.py', 'integration\watcher.py', 'integration\bridge.py',
+    'integration\passenger_wsgi.py', 'integration\transport\api.py',
+    'integration\transport\wsgi.py', 'integration\transport\store.py',
+    'integration\transport\config.py', 'integration\transport\client.py',
+    'integration\web\index.html', 'integration\web\app.js', 'integration\web\style.css'
+)
+$missing = @($required | Where-Object { -not (Test-Path (Join-Path $Root $_)) })
+if ($missing.Count -gt 0) {
+    throw "нет файлов интеграции: $($missing -join ', ')"
 }
-
-# Каталоги очереди создаёт сам агент: QueueStore.ensure() при первом обращении.
-& py -3 (Join-Path $Root 'integration\agent.py') --root $Root --list | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    throw 'не удалось создать каталог очереди - см. вывод integration\agent.py --list'
-}
-Write-Host 'очередь: каталоги готовы'
+Write-Host 'файлы интеграции: ok'
 
 $configPath = Join-Path $Root 'deploy\config.json'
 if (-not (Test-Path $configPath)) {
@@ -62,13 +64,24 @@ if (-not (Test-Path $configPath)) {
     Write-Host "config.json уже есть: $configPath"
 }
 
+$config = $null
+try { $config = Get-Content $configPath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { }
+if ($config -and $config.server -and -not @($config.server.clients).Count) {
+    Write-Warning 'в server.clients нет ни одного клиента: сервер ответит 503, пока ключи не заданы'
+}
+if ($config -and $config.server -and @($config.server.clients | Where-Object { $_.key -like 'change-me*' }).Count -gt 0) {
+    Write-Warning 'ключи из образца (change-me...) не годятся для публикации: замените их в deploy\config.json'
+}
+if ($config -and $config.server -and $config.server.root) {
+    Write-Host "каталог очереди: $(Join-Path $Root $config.server.root)"
+}
+
 if (-not $NoShortcuts) {
     $shell = New-Object -ComObject WScript.Shell
     $desktop = [Environment]::GetFolderPath('Desktop')
-    # Ярлык watcher-а ведёт на скрипт, а не на .bat: скрипт поднимает watcher фоном
-    # (окно консоли не нужно) и сам проверяет, что процесс взял замок очереди.
+    # Ярлык ведёт на скрипт, а не на .bat: скрипт поднимает watcher фоном (окно
+    # консоли не нужно) и сам проверяет, что процесс взял замок.
     $targets = @(
-        @{ Name = 'Агент 1С - окно задач'; Target = (Join-Path $Root 'deploy\run-gui.bat'); Args = '' },
         @{ Name = 'Агент 1С - watcher очереди'; Target = 'powershell.exe'
            Args = '-NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $Root 'scripts\start-watcher.ps1') + '"' }
     )
@@ -84,6 +97,8 @@ if (-not $NoShortcuts) {
 
 Write-Host ''
 Write-Host 'Дальше:'
-Write-Host '  1) scripts\start-watcher.ps1 - поднять watcher очереди фоном (живёт до scripts\stop-watcher.ps1)'
-Write-Host '  2) deploy\run-gui.bat - поставить задачу и прочитать результат'
-Write-Host '  3) интеграция из 1С: POST /api/task или строка в queue\tasks.jsonl - docs\07-external-integration.md'
+Write-Host '  1) deploy\run-server.bat - локальный сервер очереди (на хостинге его заменяет Passenger:'
+Write-Host '     корень приложения integration\, точка входа integration\passenger_wsgi.py)'
+Write-Host '  2) scripts\start-watcher.ps1 - поднять watcher очереди фоном (живёт до scripts\stop-watcher.ps1)'
+Write-Host '  3) страница задач: адрес сервера, вход по ключу клиента, задача и её стадии'
+Write-Host '  4) интеграция из 1С: POST /api/task - docs\07-external-integration.md'

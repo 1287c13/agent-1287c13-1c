@@ -1,15 +1,17 @@
 # -*- coding: utf-8 -*-
-"""Задача внешней интеграции: сборка из слотов, нормализация и проверка по схеме.
+"""Задача внешней интеграции: сборка из слотов, проверка формы и разрешение базы.
 
-Один и тот же код собирает задачу в трёх местах: в GUI при нажатии «Отправить»,
-на HTTP-сервере при POST /api/task и в watcher-e при разборе строки журнала. Поэтому
-формулировка контракта строится функцией build_prompt, а не руками в каждом месте:
-иначе три отправителя дадут три разных текста задачи.
+Проверка разделена по машинам, потому что разделены знания:
 
-Проверка - двухслойная: сначала формальная (схема task_schema.json через
-transport.schema), затем смысловая - режим задачи и разрешение слота <база> по
-.v8-project.json. База, которой нет в конфиге, - ошибка отправителя, а не проблема
-агента: задача до Cline не доходит.
+    validate_shape (сервер)   слоты, режим, отправитель, режим доставки. База
+                              сверяется с server.databases из deploy\\config.json -
+                              это перечисление для формы, а не путь к базе;
+    validate_task  (агент)    смысл задачи на машине харнесса: слот <база>
+                              разрешается по .v8-project.json, чтобы агент и не
+                              начинал работу с несуществующей базой.
+
+Формулировка контракта строится одной функцией build_prompt - и сервер, и
+командная строка, и агент дают один и тот же текст задачи.
 """
 
 import json
@@ -21,31 +23,18 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
-from transport.schema import read_schema, validate, format_errors  # noqa: E402
-from transport.store import DEFAULT_TIMEOUT_S, host_name, new_task_id, now_iso, write_text_atomic  # noqa: E402
+from transport.config import project_root  # noqa: E402
+from transport.schema import format_errors, read_schema, validate  # noqa: E402
+from transport.store import DEFAULT_TIMEOUT_S, host_name, new_task_id, now_iso  # noqa: E402
 
 MODES = ('db', 'harness')
-# Отправители, которым разрешена задача по инструменту агента (mode=harness):
-# командная строка и файловый обмен на машине харнесса. Окно задач (gui) и
-# HTTP-сервер (http) - отправители заказчика, они такую задачу не ставят.
-HARNESS_SOURCES = ('cli', 'agent', 'file')
+DELIVER_MODES = ('uri', 'manual', 'echo', 'auto')
 DBS_FILE = '.v8-project.json'
 
-# Слоты контракта: «как <роль> сделай <действие> в базе <база> чтобы <цель> по START.md».
-# Слот <цель> необязателен: без него формулировка обходится без «чтобы <цель>»,
-# потому что цель нужна не всякой задаче, а форм у отправителя должно быть меньше.
 PROMPT_DB = 'как {role} сделай {action} в базе {db} чтобы {goal} по START.md'
 PROMPT_DB_SHORT = 'как {role} сделай {action} в базе {db} по START.md'
 PROMPT_HARNESS = 'как инженер харнесса сделай {action} чтобы {goal} по START.md'
 PROMPT_HARNESS_SHORT = 'как инженер харнесса сделай {action} по START.md'
-
-
-def project_root(path=None):
-    """Корень харнесса: каталог выше integration\\."""
-    base = path or os.path.dirname(os.path.abspath(__file__))
-    if os.path.basename(base) == 'integration':
-        return os.path.dirname(base)
-    return base
 
 
 def one_line(text):
@@ -71,57 +60,118 @@ def build_prompt(role, action, goal, db=None, mode='db'):
     return PROMPT_DB_SHORT.format(role=one_line(role), action=action, db=one_line(db))
 
 
-def make_task(role, action, goal, db=None, mode='db', source='cli', deliver='auto',
-              timeout_s=DEFAULT_TIMEOUT_S, note=None, prompt=None, client=None):
+def make_task(role, action, goal, db=None, mode='db', source='http', deliver='auto',
+              timeout_s=DEFAULT_TIMEOUT_S, note=None, client=None, task_id=None):
     """Собрать задачу: идентификатор, время, отправитель, формулировка контракта."""
     mode = mode if mode in MODES else 'db'
     if mode == 'harness':
         db = None
     task = {
-        'id': new_task_id(),
+        'id': task_id or new_task_id(),
         'created_at': now_iso(),
         'source': source,
         'client': client or host_name(),
         'mode': mode,
         'role': one_line(role),
         'action': one_line(action),
-        'db': db,
-        'prompt': one_line(prompt) or build_prompt(role, action, goal, db, mode),
-        'deliver': deliver,
+        'db': db or None,
+        'prompt': build_prompt(role, action, goal, db, mode),
+        'deliver': deliver if deliver in DELIVER_MODES else 'auto',
         'timeout_s': int(timeout_s),
     }
     if one_line(goal):
-        # Пустую цель в задачу не кладём: схема проверяет длину только у присутствующего поля.
         task['goal'] = one_line(goal)
     if note:
         task['note'] = one_line(note)
     return task
 
 
+def task_schema(root):
+    """Схема задачи из integration\\schemas."""
+    return read_schema(os.path.join(project_root(root), 'integration', 'schemas',
+                                    'task_schema.json'))
+
+
+def validate_shape(cfg, payload, client):
+    """Проверить форму задачи на сервере. Возвращает (задача, список ошибок).
+
+    Форму присылает браузер или внешний клиент: слоты контракта, режим и необязательный
+    режим доставки. Идентификатор, время, отправитель и формулировку присваивает сервер -
+    клиент их не задаёт, иначе он мог бы подменить отправителя в журнале.
+    """
+    if not isinstance(payload, dict):
+        return None, ['тело запроса должно быть объектом JSON']
+    client = client or {}
+    mode = payload.get('mode') if payload.get('mode') in MODES else 'db'
+    task = make_task(
+        payload.get('role') or 'программист 1С',
+        payload.get('action'),
+        payload.get('goal'),
+        payload.get('db') if mode == 'db' else None,
+        mode=mode,
+        source='http',
+        deliver=payload.get('deliver') if payload.get('deliver') in DELIVER_MODES else 'auto',
+        timeout_s=payload.get('timeout_s') or DEFAULT_TIMEOUT_S,
+        note=payload.get('note'),
+        client=client.get('name') or None,
+    )
+    errors = list(validate(task, task_schema(cfg.get('project_root')), 'задача'))
+
+    if mode == 'harness':
+        if not client.get('allow_harness'):
+            errors.append('режим harness: клиенту «%s» задачи по инструменту агента не разрешены'
+                          % (client.get('name') or '?'))
+    else:
+        if not task.get('db'):
+            errors.append('режим db: не заполнен слот базы')
+        else:
+            known = [str(x).strip().lower() for x in
+                     (cfg.get('server') or {}).get('databases') or []]
+            if known and task['db'].strip().lower() not in known:
+                errors.append('режим db: базы «%s» нет в server.databases (%s)'
+                              % (task['db'], ', '.join(known)))
+    return task, errors
+
+
+
+def validate_task(root, raw):
+    """Проверить задачу на машине агента: схема плюс разрешение слота <база>.
+
+    Здесь и только здесь есть .v8-project.json, поэтому только здесь проверяется,
+    что база существует. Ошибка означает, что задачу нельзя выполнять: агенту
+    нечего открывать.
+    """
+    task = normalize_task(raw)
+    errors = list(validate(task, task_schema(root), 'задача'))
+    if task.get('mode') == 'db':
+        if not task.get('db'):
+            errors.append('режим db: не заполнен слот базы')
+        else:
+            entry, message = resolve_db(root, task['db'])
+            if entry is None:
+                errors.append('режим db: %s' % message)
+    return task, errors
+
+
 def normalize_task(raw):
-    """Достроить поля, которые отправитель мог не заполнить. Исходный словарь не меняется."""
+    """Достроить поля, которые агент мог получить не полностью. Исходный словарь не меняется."""
     task = dict(raw or {})
-    if not task.get('id'):
-        task['id'] = new_task_id()
-    if not task.get('created_at'):
-        task['created_at'] = now_iso()
-    if not task.get('source'):
-        task['source'] = 'file'
-    if not task.get('client'):
-        task['client'] = host_name()
-    if task.get('mode') not in MODES:
-        task['mode'] = 'db'
+    task.setdefault('id', new_task_id())
+    task.setdefault('created_at', now_iso())
+    task.setdefault('source', 'http')
+    task['mode'] = task.get('mode') if task.get('mode') in MODES else 'db'
+    if task['mode'] == 'harness':
+        task['db'] = None
     for name in ('role', 'action', 'goal', 'db', 'prompt', 'note'):
         if isinstance(task.get(name), str):
             task[name] = one_line(task[name])
-    if task['mode'] == 'harness':
-        task['db'] = None
     if not task.get('goal'):
         task.pop('goal', None)
     if not task.get('prompt') and task.get('action'):
         task['prompt'] = build_prompt(task.get('role') or 'инженер харнесса',
-                                      task['action'], task.get('goal'), task.get('db'), task['mode'])
-    if not task.get('deliver'):
+                                      task['action'], task.get('goal'), task.get('db'),
+                                      task['mode'])
+    if task.get('deliver') not in DELIVER_MODES:
         task['deliver'] = 'auto'
     if not task.get('timeout_s'):
         task['timeout_s'] = DEFAULT_TIMEOUT_S
@@ -130,7 +180,7 @@ def normalize_task(raw):
 
 def load_databases(root):
     """Записи баз из .v8-project.json. Пустой список - файла нет или он нечитаем."""
-    path = os.path.join(root, DBS_FILE)
+    path = os.path.join(project_root(root), DBS_FILE)
     if not os.path.isfile(path):
         return []
     try:
@@ -141,33 +191,12 @@ def load_databases(root):
     return list(config.get('databases') or [])
 
 
-def database_labels(root):
-    """Строки для выпадающего списка окна: «id - имя базы», без алиасов.
-
-    Алиасы в списке не показываются: строка из них вырастала до полстроки и прятала
-    сам факт, что баз в конфигурации несколько.
-    """
-    return [item['label'] for item in database_choices(root)]
-
-
-def database_choices(root):
-    """Записи баз для окна задач: label (что видно), value (id для задачи), path."""
-    choices = []
-    for entry in load_databases(root):
-        value = entry.get('id') or entry.get('name') or ''
-        name = entry.get('name') or ''
-        label = value if (not name or name == value) else '%s - %s' % (value, name)
-        choices.append({'label': label, 'value': value,
-                        'path': entry.get('path') or entry.get('ref') or
-                                entry.get('server') or ''})
-    return choices
-
-
 def resolve_db(root, value):
     """Найти запись базы по id, имени, алиасу или пути.
 
-    Возвращает пару (запись_или_None, пояснение). Агент в задаче базу разрешает по
-    тому же правилу, поэтому проверка отправителя и работа агента не расходятся.
+    Возвращает пару (запись_или_None, пояснение). Отправитель задачу по этому правилу
+    не отклоняет: список баз у сервера - перечисление для формы, а путь к базе есть
+    только на машине агента.
     """
     if not value:
         return None, 'слот базы пуст'
@@ -187,41 +216,19 @@ def resolve_db(root, value):
     return None, 'базы "%s" нет в %s' % (probe, DBS_FILE)
 
 
-def validate_task(root, raw):
-    """Нормализовать и проверить задачу. Возвращает (задача, список ошибок)."""
-    task = normalize_task(raw)
-    errors = []
-    schema = read_schema(os.path.join(root, 'integration', 'schemas', 'task_schema.json'))
-    errors.extend(validate(task, schema, 'задача'))
-    if task.get('mode') == 'db':
-        if not task.get('db'):
-            errors.append('режим db: не заполнен слот базы')
-        else:
-            entry, message = resolve_db(root, task['db'])
-            if entry is None:
-                errors.append('режим db: %s' % message)
-    elif task.get('mode') == 'harness':
-        if task.get('db'):
-            errors.append('режим harness: слот базы должен быть пустым')
-        # Задачу по самому инструменту агента ставит только агент (командная строка или
-        # файловый обмен на машине харнесса). Окно задач и HTTP-сервер - отправители
-        # заказчика: через них инструмент агента не переписывается.
-        source = (task.get('source') or 'cli').lower()
-        if source not in HARNESS_SOURCES:
-            errors.append('режим harness: отправитель «%s» не ставит задачи по инструменту '
-                          'агента (это делает только сам агент из командной строки)'
-                          % source)
-    return task, errors
+def database_choices(root):
+    """Записи баз для формы: label (что видно), value (id для задачи), path."""
+    choices = []
+    for entry in load_databases(root):
+        value = entry.get('id') or entry.get('name') or ''
+        name = entry.get('name') or ''
+        label = value if (not name or name == value) else '%s - %s' % (value, name)
+        choices.append({'label': label, 'value': value,
+                        'path': entry.get('path') or entry.get('ref') or
+                                entry.get('server') or ''})
+    return choices
 
 
 def errors_to_text(task, errors):
     """Сообщение о непринятой задаче - одной строкой, с идентификатором."""
-    return 'задача %s отклонена: %s' % (task.get('id', '?'), format_errors(errors))
-
-
-def save_rejected(store, task, errors, payload=None):
-    """Положить отклонённую задачу в queue\\failed - отправитель должен увидеть причину."""
-    path = os.path.join(store.dirs['failed'], 'rejected_%s.json' % task.get('id', 'unknown'))
-    write_text_atomic(path, json.dumps({'task': payload if payload is not None else task,
-                                        'errors': errors}, ensure_ascii=False, indent=2))
-    return path
+    return 'задача %s отклонена: %s' % ((task or {}).get('id', '?'), format_errors(errors))

@@ -1,22 +1,21 @@
 ﻿<#
 .SYNOPSIS
-    Поднять watcher очереди фоном: разбор журнала и передача задач в Cline.
+    Поднять watcher очереди фоном: забирает задачи с сервера и передаёт их в Cline.
 
 .DESCRIPTION
-    Watcher - единственный разборщик очереди (queue\tasks.jsonl): он раскладывает строки
-    журнала по inbox/failed и передаёт задачи в Cline. Пока он не работает, задача,
-    отправленная из окна или по HTTP, остаётся строкой в журнале и до агента не доходит.
+    Watcher - единственный процесс на машине агента, который берёт задачи с сервера.
+    Пока он не работает, задача остаётся в очереди на сервере и до Cline не доходит.
     Поэтому watcher поднимают до постановки задач и держат запущенным: процесс живёт,
     пока его не погасят явно (scripts\stop-watcher.ps1). Сбой отдельного прохода его
-    не завершает - ошибка уходит в logs\watcher.log и в queue\bridge.jsonl.
+    не завершает - ошибка уходит в logs\watcher.log.
 
     Скрипт идемпотентен: если watcher уже работает, второй не поднимается (повторный
     запуск - только ключом -Force, который сначала гасит старый). Проверка идёт по
     живым процессам с integration\watcher.py в командной строке, а pid последнего
-    запуска лежит в queue\watcher.pid.
+    запуска лежит в temp\queue\watcher.pid.
 
-    Режим доставки, интервал и вебхук берутся из deploy\config.json (секция watcher),
-    ключи командной строки их перекрывают.
+    Адрес сервера, ключ агента, режим доставки и паузы берутся из deploy\config.json
+    (секция agent), ключи командной строки их перекрывают.
 
 .EXAMPLE
     powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-watcher.ps1
@@ -30,7 +29,7 @@ param(
     [string] $Root,
     [string] $Deliver,
     [double] $Interval = 0,
-    [string] $WebhookUrl,
+    [string] $Server,
     [switch] $Force
 )
 
@@ -61,20 +60,19 @@ if (-not $Root) {
     $Root = Split-Path -Parent $scriptDir
 }
 $config = Read-Json (Join-Path $Root 'deploy\config.json')
-if ($config -and $config.root -and (Test-Path ([string]$config.root))) { $Root = [string]$config.root }
 $Root = (Resolve-Path $Root).Path
 Write-Host "корень харнесса: $Root"
 
 if (-not $Deliver) {
-    if ($config -and $config.watcher -and $config.watcher.deliver) { $Deliver = [string]$config.watcher.deliver }
+    if ($config -and $config.agent -and $config.agent.deliver) { $Deliver = [string]$config.agent.deliver }
     else { $Deliver = 'uri' }
 }
 if ($Interval -le 0) {
-    if ($config -and $config.watcher -and $config.watcher.interval) { $Interval = [double]$config.watcher.interval }
+    if ($config -and $config.agent -and $config.agent.interval) { $Interval = [double]$config.agent.interval }
     else { $Interval = 2.0 }
 }
-if (-not $WebhookUrl -and $config -and $config.watcher -and $config.watcher.webhook_url) {
-    $WebhookUrl = [string]$config.watcher.webhook_url
+if (-not $Server -and $config -and $config.agent -and $config.agent.server_url) {
+    $Server = [string]$config.agent.server_url
 }
 $intervalText = $Interval.ToString([System.Globalization.CultureInfo]::InvariantCulture)
 
@@ -91,18 +89,17 @@ if ($config -and $config.python) {
 $watcher = Join-Path $Root 'integration\watcher.py'
 if (-not (Test-Path $watcher)) { throw "нет файла watcher-а: $watcher" }
 
-$queueDir = Join-Path $Root 'queue'
-$pidFile = Join-Path $queueDir 'watcher.pid'
-$lockFile = Join-Path $queueDir '.watcher.lock'
+$workDir = Join-Path $Root 'temp\queue'
+$pidFile = Join-Path $workDir 'watcher.pid'
+$lockFile = Join-Path $workDir '.watcher.lock'
 $logDir = Join-Path $Root 'logs'
 $logFile = Join-Path $logDir 'watcher.log'
 $errFile = Join-Path $logDir 'watcher.err.log'
-$scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent (Resolve-Path $PSCommandPath).Path }
 
 $alive = Get-WatcherProcesses
 if ($alive.Count -gt 0 -and -not $Force) {
     Write-Host "[ok] watcher уже запущен: pid $(($alive | ForEach-Object { $_.ProcessId }) -join ', ')"
-    Write-Host "     режим: $Deliver, интервал: $intervalText с, лог: $logFile"
+    Write-Host "     режим: $Deliver, пауза: $intervalText с, лог: $logFile"
     Write-Host '     перезапуск: -Force; остановка: scripts\stop-watcher.ps1'
     exit 0
 }
@@ -113,14 +110,14 @@ if ($alive.Count -gt 0) {
     else { foreach ($p in $alive) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue } }
 }
 
-New-Item -ItemType Directory -Force -Path $queueDir, $logDir | Out-Null
-# Замок мёртвого watcher-а (queue\.watcher.lock) снимаем сами: он обновляется каждым
-# проходом, а живого процесса рядом уже нет - иначе новый watcher не подхватит очередь.
+New-Item -ItemType Directory -Force -Path $workDir, $logDir | Out-Null
+# Замок мёртвого watcher-а снимаем сами: он обновляется каждым проходом, а живого
+# процесса рядом уже нет - иначе новый watcher не подхватит очередь.
 if (Test-Path $lockFile) { Remove-Item $lockFile -Force -ErrorAction SilentlyContinue }
 
-$argLine = (@($pythonArgs) + @('"' + $watcher + '"', '--root', '"' + $Root + '"', '--run', '--process',
+$argLine = (@($pythonArgs) + @('"' + $watcher + '"', '--root', '"' + $Root + '"', '--run',
     '--deliver', $Deliver, '--interval', $intervalText)) -join ' '
-if ($WebhookUrl) { $argLine += ' --webhook-url ' + $WebhookUrl }
+if ($Server) { $argLine += ' --server "' + $Server + '"' }
 
 Write-Host "запускаю: $pythonExe $argLine"
 $proc = Start-Process -FilePath $pythonExe -ArgumentList $argLine -WorkingDirectory $Root `
@@ -131,6 +128,7 @@ $payload = [ordered]@{
     started_at = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss')
     deliver    = $Deliver
     interval_s = $Interval
+    server     = $Server
     log        = $logFile
     root       = $Root
 } | ConvertTo-Json
@@ -143,7 +141,8 @@ for ($i = 0; $i -lt 24; $i++) {
     if (-not (Get-Process -Id $proc.Id -ErrorAction SilentlyContinue)) { break }
 }
 if ($held) {
-    Write-Host "[ok] watcher работает: pid $($proc.Id), режим $Deliver, интервал $intervalText с"
+    Write-Host "[ok] watcher работает: pid $($proc.Id), режим $Deliver, пауза $intervalText с"
+    Write-Host "     сервер: $Server"
     Write-Host "     лог: $logFile (ошибки: $errFile)"
     Write-Host "     pid-файл: $pidFile"
     Write-Host '     остановка: scripts\stop-watcher.ps1'
@@ -155,3 +154,4 @@ foreach ($f in @($errFile, $logFile)) {
 }
 exit 1
 
+$scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent (Resolve-Path $PSCommandPath).Path }

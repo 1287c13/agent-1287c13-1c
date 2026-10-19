@@ -1,22 +1,23 @@
 # -*- coding: utf-8 -*-
-"""WSGI-приложение очереди: точка входа для хостинга (Passenger, waitress, IIS).
+"""WSGI-приложение сервера интеграции: Passenger, gunicorn, wsgiref - один код.
 
-HTTP-интерфейс тот же, что у сервера разработки, потому что логика у них общая
-(transport\\api.py). Разница в способе подключения: здесь приложение - вызываемый
-объект `application(environ, start_response)`, его поднимает веб-сервер.
+Приложение не зависит от того, кто его вызвал. Базовый URI, под которым сайт
+опубликован (например /agent), приходит в SCRIPT_NAME - WSGI-сервер уже отделил его
+от PATH_INFO; обёртка дополнительно срезает префикс, если сервер оставил путь целиком.
 
-Корень харнесса задаётся переменной окружения INTEGRATION_ROOT (иначе - каталог выше
-integration). Токен доступа - INTEGRATION_TOKEN: если он задан, запросы без заголовка
-X-Integration-Token получают 401. На публичном хостинге токен обязателен.
+Тело запроса читается по CONTENT_LENGTH и ограничено server.max_body: задача - это
+несколько строк текста, а не поток. Ответ всегда JSON, кроме страницы задач
+(index.html, app.js, style.css) из integration\\web.
 
-Запуск для проверки без веб-сервера:
-
-    py -3 -m wsgiref.simple_server  # не требуется: используйте transport\\http_server.py
+Экземпляр Api собирается один раз на процесс: конфиг читается при первом запросе,
+каталоги очереди создаются там же. Если конфиг битый, сервер отвечает 503 с причиной,
+а не падает на старте Passenger молчаливой 500.
 """
 
 import json
 import os
 import sys
+import traceback
 import urllib.parse
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -24,67 +25,122 @@ _INTEGRATION = os.path.dirname(_HERE)
 if _INTEGRATION not in sys.path:
     sys.path.insert(0, _INTEGRATION)
 
-from transport.api import Api, dumps  # noqa: E402
+from transport.api import Api, Response  # noqa: E402
 
-MAX_BODY = 262144
-_APIS = {}
+REASONS = {
+    200: 'OK', 202: 'Accepted', 204: 'No Content', 400: 'Bad Request',
+    401: 'Unauthorized', 403: 'Forbidden', 404: 'Not Found', 405: 'Method Not Allowed',
+    409: 'Conflict', 413: 'Payload Too Large', 500: 'Internal Server Error',
+    503: 'Service Unavailable',
+}
 
-
-def api_for(root):
-    """Один объект Api на процесс: очередь читается с диска, состояние не кэшируется."""
-    key = os.path.abspath(root)
-    if key not in _APIS:
-        _APIS[key] = Api(key)
-    return _APIS[key]
+_STATE = {}
 
 
-def respond(start_response, status, payload):
-    """Ответ в формате WSGI: JSON в UTF-8, без экранирования кириллицы."""
-    body = b'' if payload is None else dumps(payload, indent=2)
-    headers = [
-        ('Content-Type', 'application/json; charset=utf-8'),
-        ('Content-Length', str(len(body))),
-        ('Access-Control-Allow-Origin', '*'),
-        ('Access-Control-Allow-Headers', 'Content-Type, X-Integration-Token'),
+def get_api(root=None, config_path=None):
+    """Api на процесс. Ключ - корень и файл настроек: два сайта в одном процессе редки,
+    но перепутать очереди хуже, чем один лишний экземпляр."""
+    root = root or os.environ.get('INTEGRATION_ROOT') or None
+    config_path = config_path or os.environ.get('INTEGRATION_CONFIG') or None
+    key = (os.path.abspath(root) if root else '', os.path.abspath(config_path) if config_path else '')
+    if key not in _STATE:
+        _STATE[key] = Api(root=root, config_path=config_path)
+    return _STATE[key]
+
+
+def _cors(api, environ):
+    """Заголовки CORS: браузер обращается к серверу с другого адреса (страница локальная
+    или на другом домене). origin берётся из настроек, а не от запроса."""
+    origin = (api.config.get('server') or {}).get('cors_origin') or '*'
+    return [
+        ('Access-Control-Allow-Origin', origin),
         ('Access-Control-Allow-Methods', 'GET, POST, OPTIONS'),
+        ('Access-Control-Allow-Headers', 'Content-Type, X-Integration-Token, Authorization'),
+        ('Access-Control-Max-Age', '600'),
     ]
-    start_response('%s %s' % (status, _reason(status)), headers)
-    return [body]
 
 
-def _reason(status):
-    return {200: 'OK', 202: 'Accepted', 204: 'No Content', 400: 'Bad Request',
-            401: 'Unauthorized', 404: 'Not Found', 413: 'Payload Too Large',
-            500: 'Internal Server Error'}.get(status, 'OK')
-
-
-def application(environ, start_response):
-    """Точка входа WSGI: разбор запроса, вызов Api, JSON-ответ."""
-    root = environ.get('INTEGRATION_ROOT') or os.environ.get('INTEGRATION_ROOT') or \
-        os.path.dirname(_INTEGRATION)
-    api = api_for(root)
-    method = environ.get('REQUEST_METHOD', 'GET')
-    path = environ.get('PATH_INFO', '/')
-    query = urllib.parse.parse_qs(environ.get('QUERY_STRING', ''))
-    token = environ.get('HTTP_X_INTEGRATION_TOKEN')
-
-    payload = None
-    if method == 'POST':
-        try:
-            length = int(environ.get('CONTENT_LENGTH') or 0)
-        except (ValueError, TypeError):
-            length = 0
-        if length > MAX_BODY:
-            return respond(start_response, 413, {'error': 'тело запроса больше %s байт' % MAX_BODY})
-        body = environ['wsgi.input'].read(length) if length > 0 else b''
-        if body:
-            try:
-                payload = json.loads(body.decode('utf-8'))
-            except (ValueError, UnicodeDecodeError):
-                return respond(start_response, 400, {'error': 'тело не разобрано как JSON'})
-
+def _read_json(environ, max_body):
+    """Тело запроса: (payload, ошибка). Ошибка - текст для 400/413."""
     try:
-        status, obj = api.dispatch(method, path, payload, query, token=token)
-    except Exception as exc:  # приложение не должно отдавать трассировку клиенту
-        status, obj = 500, {'error': 'внутренняя ошибка очереди: %s' % exc}
-    return respond(start_response, status, obj)
+        length = int(environ.get('CONTENT_LENGTH') or 0)
+    except (TypeError, ValueError):
+        length = 0
+    if length <= 0:
+        return None, None
+    if length > max_body:
+        return None, 'тело запроса больше %d байт' % max_body
+    raw = environ.get('wsgi.input').read(length)
+    if not raw:
+        return None, None
+    try:
+        return json.loads(raw.decode('utf-8')), None
+    except (ValueError, UnicodeDecodeError):
+        return None, 'тело не разобрано как JSON'
+
+
+def _error_response(status, message):
+    return Response(status, payload={'error': message})
+
+
+def handle(api, environ):
+    """Разобрать окружение WSGI и вернуть Response."""
+    method = environ.get('REQUEST_METHOD') or 'GET'
+    path = environ.get('PATH_INFO') or '/'
+    base = environ.get('SCRIPT_NAME') or ''
+    if base and path.startswith(base):
+        path = path[len(base):] or '/'
+    query = urllib.parse.parse_qs(environ.get('QUERY_STRING') or '')
+    headers = {}
+    for key, value in environ.items():
+        if key.startswith('HTTP_'):
+            headers[key[5:].lower().replace('_', '-')] = value
+    max_body = int((api.config.get('server') or {}).get('max_body') or 262144)
+    payload, problem = _read_json(environ, max_body)
+    if problem:
+        status = 413 if 'больше' in problem else 400
+        return _error_response(status, problem)
+    return api.dispatch(method, path, payload, query, headers)
+
+
+def make_app(root=None, config_path=None, debug=False):
+    """Собрать WSGI-приложение. debug - показывать трассировку в ответе 500."""
+
+    def application(environ, start_response):
+        try:
+            api = get_api(root, config_path)
+            response = handle(api, environ)
+        except Exception as exc:  # noqa: BLE001 - приложение не должно падать в сокет
+            sys.stderr.write('%s\n' % traceback.format_exc())
+            if debug:
+                message = 'внутренняя ошибка сервера интеграции: %s' % exc
+            else:
+                message = 'внутренняя ошибка сервера интеграции (подробности в журнале)'
+            response = _error_response(500, message)
+            try:
+                api = get_api(root, config_path)
+            except Exception:
+                api = None
+        body = response.to_bytes()
+        headers = [
+            ('Content-Type', response.content_type),
+            ('Content-Length', str(len(body))),
+            ('Cache-Control', 'no-store'),
+        ]
+        try:
+            if api is not None:
+                headers.extend(_cors(api, environ))
+        except Exception:
+            pass
+        headers.extend(response.headers.items())
+        status_line = '%d %s' % (response.status,
+                                 REASONS.get(response.status, 'OK'))
+        start_response(status_line, headers)
+        if (environ.get('REQUEST_METHOD') or 'GET').upper() == 'HEAD':
+            return [b'']
+        return [body]
+
+    return application
+
+
+application = make_app()

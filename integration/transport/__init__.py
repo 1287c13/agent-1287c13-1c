@@ -1,17 +1,23 @@
 # -*- coding: utf-8 -*-
-"""Транспорт внешней интеграции: очередь, валидация по схемам, HTTP и WSGI.
+"""Транспорт внешней интеграции: очередь на сервере, HTTP, WSGI, клиент агента.
 
 Модули пакета:
 
-    store.py   - каталог queue\\ как очередь (журнал, inbox, processing, archive, outbox);
-    schema.py  - мини-валидатор JSON Schema по схемам integration\\schemas\\;
-    api.py     - общая логика HTTP-интерфейса (health, task, result, tasks);
-    http_server.py    - сервер разработки на http.server (localhost);
-    wsgi.py           - приложение WSGI для хостинга (Passenger и подобные);
-    passenger_wsgi.py - точка входа Passenger.
+    store.py      - каталог очереди на сервере (inbox, processing, archive, outbox,
+                    failed, agents, events.jsonl) и переходы состояний;
+    config.py     - deploy\\config.json: сервер (ключи, базы, лимиты) и агент;
+    schema.py     - мини-валидатор JSON Schema по схемам integration\\schemas\\;
+    api.py        - логика HTTP-интерфейса (задачи, стадии, ответы, агенты);
+    client.py     - HTTP-клиент агента и командной строки;
+    http_server.py - локальный сервер на wsgiref (проверка без хостинга);
+    wsgi.py        - приложение WSGI для Passenger и подобных серверов.
 
-Смысл разделения: логика одна (api.py), а транспорт съёмный. Локально гоняют
-http_server.py, на сервере - wsgi.py под Passenger; обе стороны читают и пишут одну
-и ту же очередь на диске, поэтому переход с локального запуска на серверный ничего
-не меняет в протоколе задач.
+Точка входа Passenger лежит выше пакета - integration\\passenger_wsgi.py: корень
+приложения Passenger - каталог integration\\, а не transport\\.
+
+Смысл разделения: очередь одна и живёт на сервере, а транспорт съёмный. Локальная
+проверка (http_server.py) и хостинг (wsgi.py) исполняют один api.py, поэтому
+протокол задач от способа запуска не зависит. Агент общается с очередью только по
+HTTP (client.py) и не держит второй каталог очереди у себя.
 """
+

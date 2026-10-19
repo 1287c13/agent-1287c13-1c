@@ -219,7 +219,7 @@ $externalLeaves = @('shcntx_ru.hbk', 'v8-project-guide.md', 'jsonparamsru.md', '
 $runtimePrefixes = @('.cline\mcp', '.cline\skills', '.vanessa', '.code-index', 'dump', 'logs', 'cache', 'temp', 'analysis', 'skills-vendor', 'docs\jsonparams', 'queue', 'deploy\config.json')
 # Имена, которые создаются рантаймом в любом месте (настройки обработки, метка версии,
 # настройки внешней интеграции - по умолчанию их нет, они появляются при установке).
-$runtimeLeaves = @('params.json', 'version.txt', 'config.json')
+$runtimeLeaves = @('params.json', 'version.txt', 'config.json', 'answer.md', 'prompt.txt')
 # Индекс имён файлов проекта: некоторые ссылки называют только имя файла.
 # Тяжёлые каталоги отсекаются на уровне файловой системы. Get-ChildItem -Recurse по корню
 # сначала полностью перечисляет их содержимое (в dump\ - свыше 127 тыс. файлов XML-выгрузки),

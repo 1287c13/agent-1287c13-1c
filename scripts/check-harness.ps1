@@ -255,68 +255,86 @@ else { Bad 'нет каталога skills-vendor - выполните scripts\i
 
 # --- 14. Внешняя интеграция (очередь задач) -----------------------------------
 Head 'Внешняя интеграция (очередь задач)'
-$layerFiles = @('integration\agent.py', 'integration\watcher.py', 'integration\task.py',
-    'integration\transport\store.py', 'integration\transport\api.py', 'gui\AgentGUI.py',
-    'gui\ui_kit.py', 'deploy\install-local.ps1', 'deploy\config.example.json',
+$layerFiles = @('integration\agent.py', 'integration\watcher.py', 'integration\bridge.py',
+    'integration\passenger_wsgi.py', 'integration\transport\store.py',
+    'integration\transport\api.py', 'integration\transport\config.py',
+    'integration\transport\client.py', 'integration\transport\wsgi.py',
+    'integration\web\index.html', 'integration\web\app.js', 'integration\web\style.css',
+    'deploy\install-local.ps1', 'deploy\config.example.json',
     'scripts\start-watcher.ps1', 'scripts\stop-watcher.ps1')
 $layerMissing = @($layerFiles | Where-Object { -not (Test-Path (Join-Path $Root $_)) })
-if ($layerMissing.Count -eq 0) { Ok 'файлы слоя на месте (агент, watcher, транспорт, окно, установка)' }
+if ($layerMissing.Count -eq 0) { Ok 'файлы слоя на месте (сервер, страница задач, агент, watcher, установка)' }
 else { Bad "нет файлов внешней интеграции: $($layerMissing -join ', ')" }
 
 $deployConfig = Join-Path $Root 'deploy\config.json'
-if (Test-Path $deployConfig) { Ok 'настройки интеграции созданы: deploy\config.json (правьте копию, в git она не уходит)' }
+$serverRoot = ''
+if (Test-Path $deployConfig) {
+    Ok 'настройки интеграции созданы: deploy\config.json (правьте копию, в git она не уходит)'
+    try {
+        $integrationConfig = Get-Content $deployConfig -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($integrationConfig.server -and $integrationConfig.server.root) {
+            $serverRoot = [string]$integrationConfig.server.root
+        }
+        if ($integrationConfig.server -and -not @($integrationConfig.server.clients).Count) {
+            Warn 'в server.clients нет ни одного ключа: сервер ответит 503 (deploy\config.json)'
+        }
+        if ($integrationConfig.server -and @($integrationConfig.server.clients |
+                Where-Object { [string]$_.key -like 'change-me*' }).Count -gt 0) {
+            Warn 'ключи из образца (change-me...) не заменены: так публиковать нельзя'
+        }
+    } catch { Warn "deploy\config.json не разобран: $deployConfig" }
+}
 else { Info 'настроек интеграции нет: deploy\config.json создает deploy\install-local.ps1 (слой необязательный)' }
 
-$queueDir = Join-Path $Root 'queue'
-if (-not (Test-Path $queueDir)) {
-    Info 'каталога queue нет: слой не запускался (deploy\install-local.ps1)'
-}
-else {
-    $journal = Join-Path $queueDir 'tasks.jsonl'
-    $journalBytes = 0
-    if (Test-Path $journal) { $journalBytes = (Get-Item $journal).Length }
-    $queueCounts = @{}
-    foreach ($sub in @('inbox', 'processing', 'outbox', 'failed')) {
-        $folder = Join-Path $queueDir $sub
-        $queueCounts[$sub] = 0
-        if (Test-Path $folder) {
-            $queueCounts[$sub] = @(Get-ChildItem $folder -File -Filter *.json -ErrorAction SilentlyContinue).Count
-        }
-    }
-    Ok "очередь queue: журнал $journalBytes байт, inbox $($queueCounts['inbox']), processing $($queueCounts['processing']), outbox $($queueCounts['outbox']), failed $($queueCounts['failed'])"
-    $offset = Join-Path $queueDir '.watch_offset'
-    $lock = Join-Path $queueDir '.watcher.lock'
-    $marks = @()
-    foreach ($p in @($lock, $offset)) { if (Test-Path $p) { $marks += $p } }
-    if ($marks.Count -eq 0) {
-        Warn 'watcher очереди не проходил ни разу: журнал не разбирается (scripts\start-watcher.ps1)'
+if ($serverRoot) {
+    if ([System.IO.Path]::IsPathRooted($serverRoot)) { $queueDir = $serverRoot }
+    else { $queueDir = Join-Path $Root $serverRoot }
+    if (-not (Test-Path $queueDir)) {
+        Info "каталога очереди нет: $queueDir (создаст сервер при первом запросе)"
     }
     else {
-        # Свежая из двух отметок: замок watcher обновляет каждый проход, позиция журнала -
-        # только при появлении строк, поэтому на простое свежая отметка - замок.
-        $ageSec = 999999
-        foreach ($p in $marks) {
-            $a = [math]::Round(((Get-Date) - (Get-Item $p).LastWriteTime).TotalSeconds, 0)
-            if ($a -lt $ageSec) { $ageSec = $a }
+        $queueCounts = @{}
+        foreach ($sub in @('inbox', 'processing', 'outbox', 'failed', 'agents')) {
+            $folder = Join-Path $queueDir $sub
+            $queueCounts[$sub] = 0
+            if (Test-Path $folder) {
+                $queueCounts[$sub] = @(Get-ChildItem $folder -File -Filter *.json -ErrorAction SilentlyContinue).Count
+            }
         }
-        if ($ageSec -le 60) { Ok "watcher очереди: последний проход ${ageSec} с назад" }
-        else { Warn "watcher очереди молчит: последний проход ${ageSec} с назад - задачи не разбираются (scripts\start-watcher.ps1)" }
+        Ok ("очередь ${queueDir}: ждут $($queueCounts['inbox']), в работе $($queueCounts['processing']), " +
+            "итогов $($queueCounts['outbox']), сбоев $($queueCounts['failed']), агентов $($queueCounts['agents'])")
     }
-    $watcherPidFile = Join-Path $queueDir 'watcher.pid'
-    if (Test-Path $watcherPidFile) {
-        try {
-            $watcherPid = (Get-Content $watcherPidFile -Raw -Encoding UTF8 | ConvertFrom-Json).pid
-            if ($watcherPid -and (Get-Process -Id $watcherPid -ErrorAction SilentlyContinue)) {
-                Ok "watcher поднят фоном: pid $watcherPid (стоп - scripts\stop-watcher.ps1)"
-            } else { Warn "pid-файл остался от остановленного watcher-а: $watcherPidFile (поднять - scripts\start-watcher.ps1)" }
-        } catch { Warn "pid-файл watcher-а не читается: $watcherPidFile" }
-    }
-    if (Test-Path (Join-Path $Root '.git')) {
-        & git -C $Root check-ignore -q -- 'queue' 2>$null
-        if ($LASTEXITCODE -eq 0) { Ok 'каталог queue закрыт .gitignore (состояние обмена в git не хранится)' }
-        else { Warn 'queue не в .gitignore: состояние очереди может попасть в коммит' }
+    $legacyJournal = Join-Path $Root 'queue\tasks.jsonl'
+    if (Test-Path $legacyJournal) {
+        Warn 'остался журнал прежней схемы queue\tasks.jsonl: он больше не читается (задачи переносятся вручную)'
     }
 }
+
+$watcherPidFile = Join-Path $Root 'temp\queue\watcher.pid'
+if (Test-Path $watcherPidFile) {
+    try {
+        $watcherPid = (Get-Content $watcherPidFile -Raw -Encoding UTF8 | ConvertFrom-Json).pid
+        if ($watcherPid -and (Get-Process -Id $watcherPid -ErrorAction SilentlyContinue)) {
+            Ok "watcher поднят фоном: pid $watcherPid (стоп - scripts\stop-watcher.ps1)"
+        } else { Info "pid-файл остался от остановленного watcher-а: $watcherPidFile" }
+    } catch { Warn "pid-файл watcher-а не читается: $watcherPidFile" }
+}
+else { Info 'watcher не поднят фоном: задачи берёт только запущенный вручную процесс' }
+
+$watcherLock = Join-Path $Root 'temp\queue\.watcher.lock'
+if (Test-Path $watcherLock) {
+    $lockAge = [math]::Round(((Get-Date) - (Get-Item $watcherLock).LastWriteTime).TotalSeconds, 0)
+    if ($lockAge -le 60) { Ok "watcher очереди: последний проход ${lockAge} с назад" }
+    else { Warn "замок watcher-а не обновлялся ${lockAge} с: процесс, вероятно, не работает" }
+}
+else { Info 'отметки проходов watcher-а нет: он ещё не запускался' }
+
+if (Test-Path (Join-Path $Root '.git')) {
+    & git -C $Root check-ignore -q -- 'queue' 2>$null
+    if ($LASTEXITCODE -eq 0) { Ok 'каталог queue закрыт .gitignore (состояние обмена в git не хранится)' }
+    else { Warn 'queue не в .gitignore: состояние очереди может попасть в коммит' }
+}
+
 
 # --- 15. Промпт-бюджет (всегда-инжектируемый префикс) -------------------------
 # Файлы .clinerules\, AGENTS.md и метаданные скиллов уходят в каждый запрос целиком.

@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Очередь задач агента 1С</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <h1>Очередь задач агента 1С</h1>
+    <p class="sub">Сервер держит очередь, watcher забирает задачи и передаёт их в Cline.
+      Страница ничего не опрашивает на простое: запросы идут при входе, отправке задачи
+      и пока поставленная задача не завершена.</p>
+  </header>
+
+  <section class="card" id="auth-card">
+    <h2>Подключение</h2>
+    <div class="row">
+      <label>Адрес сервера
+        <input id="server-url" type="text" placeholder="https://example.org/agent" spellcheck="false">
+      </label>
+      <label>Ключ доступа
+        <input id="api-key" type="password" placeholder="ключ клиента" autocomplete="off">
+      </label>
+      <button id="btn-connect" type="button">Войти</button>
+      <span id="conn-state" class="state"></span>
+    </div>
+    <p class="warn">Ключ хранится в localStorage браузера открытым текстом: любой, у кого
+      есть доступ к этому профилю, сможет поставить задачу. На общем компьютере ключ
+      не сохраняйте, а после работы нажмите «Забыть все ключи».</p>
+    <div id="keys-box" class="keys"></div>
+  </section>
+
+  <section class="card" id="submit-card" hidden>
+    <h2>Новая задача</h2>
+    <form id="task-form">
+      <div class="row">
+        <label>Режим
+          <select id="task-mode">
+            <option value="db">по базе 1С</option>
+            <option value="harness">по инструменту агента</option>
+          </select>
+        </label>
+        <label id="db-field">База
+          <input id="task-db" type="text" list="db-list" placeholder="id базы" autocomplete="off">
+          <datalist id="db-list"></datalist>
+        </label>
+        <label>Роль
+          <input id="task-role" type="text" value="программист 1С">
+        </label>
+        <label>Доставка
+          <select id="task-deliver">
+            <option value="auto">по умолчанию</option>
+            <option value="uri">открыть в Cline</option>
+            <option value="manual">вручную</option>
+            <option value="echo">проверка без Cline</option>
+          </select>
+        </label>
+      </div>
+      <label class="wide">Что сделать
+        <textarea id="task-action" rows="3" required
+          placeholder="например: найди документы, где не заполнен склад"></textarea>
+      </label>
+      <label class="wide">Зачем (критерий готовности, необязательно)
+        <textarea id="task-goal" rows="2"
+          placeholder="например: список документов с причиной и проверкой запросом"></textarea>
+      </label>
+      <div class="row">
+        <label>Ждать результат, с
+          <input id="task-timeout" type="number" min="60" max="7200" step="60" value="1800">
+        </label>
+        <button id="btn-submit" type="submit">Отправить задачу</button>
+        <span id="submit-state" class="state"></span>
+      </div>
+    </form>
+  </section>
+
+  <section class="card" id="status-card" hidden>
+    <h2>Задача <span id="status-id" class="mono"></span></h2>
+    <p><span id="status-badge" class="badge">queued</span>
+      <span id="status-hint" class="hint"></span></p>
+    <dl class="facts">
+      <dt>Агент</dt><dd id="status-agent">-</dd>
+      <dt>В работе</dt><dd id="status-elapsed">-</dd>
+      <dt>Пояснение</dt><dd id="status-message">-</dd>
+    </dl>
+    <ol id="status-progress" class="progress"></ol>
+    <div class="row">
+      <button id="btn-answer-md" type="button" disabled>Скачать ответ (.md)</button>
+      <button id="btn-answer-html" type="button" disabled>Открыть ответ (HTML)</button>
+    </div>
+  </section>
+
+  <section class="card" id="history-card" hidden>
+    <h2>Последние задачи</h2>
+    <div class="row">
+      <button id="btn-history" type="button">Обновить историю</button>
+      <span id="history-state" class="state"></span>
+    </div>
+    <table id="history-table">
+      <thead>
+        <tr><th>Задача</th><th>Стадия</th><th>Агент</th><th>Создана</th><th>Задача</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <script src="app.js"></script>
+</body>
+</html>

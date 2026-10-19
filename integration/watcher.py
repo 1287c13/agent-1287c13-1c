@@ -1,37 +1,36 @@
 # -*- coding: utf-8 -*-
-"""Watcher очереди: журнал задач -> inbox -> доставка в Cline.
+"""Watcher очереди: единственный процесс, который забирает задачи с сервера и ведёт их.
 
-Единственный процесс, который раскладывает задачи по состояниям. Отправители
-(GUI, HTTP-сервер, файловый обмен) только дописывают строку в queue\\tasks.jsonl;
-watcher читает журнал с сохранённой позиции (queue\\.watch_offset), проверяет каждую
-строку по схеме задачи и кладёт принятые в queue\\inbox, а отклонённые - в
-queue\\failed с причиной.
+Очередь живёт на сервере (server.root). Watcher стоит на машине агента и делает
+три вещи:
 
-Почему через журнал, а не сразу в inbox: отправитель на другом компьютере не может
-создать файл атомарно в чужом каталоге, а дозапись строки в общий журнал - операция,
-которую умеет любой протокол (файловый обмен, HTTP, ручная правка). Разбор очереди
-остаётся в одном месте - здесь.
+    1. claim  - просит у сервера следующую задачу;
+    2. доставка - передаёт её в Cline (bridge.py), отмечая стадии delivered/running;
+    3. ожидание - ждёт, пока выполняющий задачу Cline запишет результат командой
+       integration\\agent.py --write-result, и убирает рабочий каталог задачи.
 
-Проход watcher-а:
+Всё, что watcher держит у себя, - рабочий каталог temp\\queue\\<id>\\ на время задачи:
+prompt.txt с формулировкой и answer.md, который заполняет агент. После записи
+результата каталог удаляется: второго каталога очереди на машине агента нет.
 
-    1. читает порцию журнала с позиции .watch_offset (неполная строка не берётся);
-    2. каждую строку проверяет (схема плюс разрешение базы) и кладёт в inbox или failed;
-    3. сдвигает позицию ровно на прочитанную часть;
-    4. по ключу --process берёт задачи из inbox через agent.py и доставляет их в Cline.
+Почему ожидание, а не повторный опрос результатов Cline: результат пишет сам агент,
+выполнивший задачу, - он знает, что проверено, и заполняет строки отчёта. Watcher не
+угадывает по журналу Cline, закончилась ли работа, а ждёт явной записи результата.
 
-Два watcher-а одновременно - ошибка: они разложили бы одну строку дважды. Поэтому
-процесс держит замок queue\\.watcher.lock, обновляя его отметку каждый проход: замок
-живого процесса не снимается, а замок убитого через две минуты можно отобрать.
+Простой: нет задач - пауза растёт 2 -> 5 -> 15 с, чтобы не дёргать сервер впустую.
+Пока watcher простаивает, он раз в минуту просит сервер вернуть задачи с истёкшим
+claim (умерший агент не должен держать задачу вечно).
 
-Watcher живёт до явной остановки: сбой отдельного прохода (битая строка, занятый файл,
-ошибка доставки) не завершает процесс, а пишется в stderr и в queue\\bridge.jsonl
-(событие watcher_error). Остановка - Ctrl+C в своём окне либо scripts\\stop-watcher.ps1,
-если процесс поднят фоном (scripts\\start-watcher.ps1).
+Запуск:
+
+    py -3 integration\\watcher.py --run                  цикл
+    py -3 integration\\watcher.py --once --deliver echo   один проход без Cline (проверка)
 """
 
 import argparse
 import json
 import os
+import shutil
 import sys
 import time
 import traceback
@@ -41,25 +40,32 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 import agent  # noqa: E402
-from task import errors_to_text, project_root, save_rejected, validate_task  # noqa: E402
-from transport.store import QueueStore, now_iso, setup_stdio, write_text_atomic  # noqa: E402
+import bridge  # noqa: E402
+from transport.client import ClientError, IntegrationClient  # noqa: E402
+from transport.config import agent_name, load_config, project_root  # noqa: E402
+from transport.store import setup_stdio  # noqa: E402
 
-BATCH_BYTES = 65536
+DEFAULT_INTERVAL_S = 2.0
+DEFAULT_IDLE_S = 15.0
 LOCK_STALE_S = 120.0
+RECLAIM_EVERY_S = 60.0
+PROGRESS_EVERY_S = 30.0
 
 
 class WatcherLock(object):
-    """Замок на единственный экземпляр watcher-а: отметка обновляется каждым проходом."""
+    """Замок на единственный экземпляр watcher-а на машине агента."""
 
-    def __init__(self, store):
-        self.path = os.path.join(store.base, '.watcher.lock')
+    def __init__(self, root):
+        self.path = os.path.join(root, 'temp', 'queue', '.watcher.lock')
 
     def acquire(self, stale=LOCK_STALE_S):
+        folder = os.path.dirname(self.path)
+        if not os.path.isdir(folder):
+            os.makedirs(folder)
         if os.path.isfile(self.path):
-            age = time.time() - os.path.getmtime(self.path)
-            if age < stale:
-                return False
             try:
+                if time.time() - os.path.getmtime(self.path) < stale:
+                    return False
                 os.remove(self.path)
             except OSError:
                 return False
@@ -83,148 +89,206 @@ class WatcherLock(object):
             pass
 
 
-def reject_line(store, line, index, offset, error_text):
-    """Отложить непринятую строку журнала: отправитель должен увидеть причину."""
-    path = os.path.join(store.dirs['failed'], 'badline_%d.json' % (offset + index))
-    write_text_atomic(path, json.dumps({'line': line, 'error': error_text},
-                                       ensure_ascii=False, indent=2))
-    store.log_bridge({'event': 'bad_line', 'file': os.path.basename(path), 'error': error_text})
+def task_work_dir(root, task_id):
+    """Рабочий каталог задачи на машине агента: temp\\queue\\<id>\\."""
+    return os.path.join(root, 'temp', 'queue', task_id)
 
 
-def process_journal(store, quiet=False):
-    """Разложить новые строки журнала по inbox и failed. Возвращает (принято, отклонено)."""
-    offset = store.read_offset()
-    accepted = 0
-    rejected = 0
-    while True:
-        lines, new_offset = store.journal_read(offset, BATCH_BYTES)
-        if not lines:
-            break
-        for index, line in enumerate(lines):
+def drop_work_dir(path):
+    """Убрать рабочий каталог задачи: после записи результата он не нужен."""
+    shutil.rmtree(path, ignore_errors=True)
+
+
+def report(quiet, text):
+    if not quiet:
+        print(text)
+
+
+def handle_task(client, cfg, task, mode, root, allow_gui=True, quiet=False):
+    """Провести одну задачу: доставка, ожидание результата, уборка.
+
+    Возвращает словарь итога для строки журнала watcher-а.
+    """
+    task_id = task['id']
+    agent_id = agent_name(cfg)
+    work = task_work_dir(root, task_id)
+    agent.prepare_answer_file(work, task)
+
+    delivery = bridge.deliver(task, work, mode,
+                              allow_gui=allow_gui,
+                              confirm_timeout=None,
+                              attempts=3,
+                              cline_data=None,
+                              cline_work_dir=agent.cline_work_dir(root))
+    report(quiet, 'задача %s: доставка %s (%s)' % (task_id, delivery.get('status'),
+                                                   delivery.get('message') or ''))
+
+    if delivery.get('status') != 'delivered':
+        client.result(task_id, agent_id, 'error', '', {'delivery': delivery.get('mode') or mode},
+                      delivery.get('message') or 'доставка не выполнена')
+        drop_work_dir(work)
+        return {'task_id': task_id, 'state': 'error', 'message': delivery.get('message') or ''}
+
+    fields = {'delivery': delivery.get('mode') or mode,
+              'confirmed': bool(delivery.get('confirmed')),
+              'cline_session': delivery.get('cline_session') or '',
+              'cline_note': delivery.get('cline_note') or ''}
+    client.progress(task_id, agent_id, 'delivered',
+                    delivery.get('message') or 'задача передана в Cline')
+
+    if mode == 'echo':
+        answer = ('режим echo: задача %s прошла цепочку сервер -> watcher -> рабочий каталог. '
+                  'Cline не вызывался, ответ сформирован watcher-ом для проверки.'
+                  % task_id)
+        client.result(task_id, agent_id, 'done', answer, fields,
+                      'режим echo: проверка цепочки без Cline')
+        drop_work_dir(work)
+        return {'task_id': task_id, 'state': 'done', 'message': 'echo'}
+
+    return wait_for_result(client, cfg, task, work, fields, quiet)
+
+
+
+def wait_for_result(client, cfg, task, work, fields, quiet=False):
+    """Ждать, пока агент запишет результат командой --write-result.
+
+    Пока ждём, раз в PROGRESS_EVERY_S отправляем стадию running: это и видимая стадия
+    в браузере, и продление claim. Ждать дольше timeout_s задачи бессмысленно - сервер
+    закроет её сам.
+    """
+    task_id = task['id']
+    agent_id = agent_name(cfg)
+    answer_path = os.path.join(work, 'answer.md')
+    limit = int(task.get('timeout_s') or 0) or 1800
+    deadline = time.time() + limit
+    last_touch = 0.0
+    while time.time() < deadline:
+        current = None
+        try:
+            current = client.status(task_id)
+        except ClientError as exc:
+            report(quiet, 'состояние задачи %s не прочитано: %s' % (task_id, exc))
+        if current and current.get('state') in ('done', 'error', 'failed', 'timeout'):
+            drop_work_dir(work)
+            return {'task_id': task_id, 'state': current.get('state'),
+                    'message': current.get('message') or ''}
+        if time.time() - last_touch >= PROGRESS_EVERY_S:
             try:
-                raw = json.loads(line)
-            except ValueError as exc:
-                reject_line(store, line, index, offset, 'строка не разобрана как JSON: %s' % exc)
-                rejected += 1
-                continue
-            if not isinstance(raw, dict):
-                reject_line(store, line, index, offset,
-                            'ожидается объект JSON, пришло %s' % type(raw).__name__)
-                rejected += 1
-                continue
-            task, errors = validate_task(store.root, raw)
-            if errors:
-                save_rejected(store, task, errors, raw)
-                store.log_bridge({'event': 'rejected', 'task_id': task.get('id'),
-                                  'errors': errors, 'text': errors_to_text(task, errors)})
-                rejected += 1
-                continue
-            store.enqueue(task)
-            store.log_bridge({'event': 'enqueue', 'task_id': task['id'],
-                              'source': task.get('source'), 'mode': task.get('mode'),
-                              'prompt': task.get('prompt')})
-            accepted += 1
-        store.write_offset(new_offset)
-        offset = new_offset
-    if not quiet and (accepted or rejected):
-        print('журнал: принято %s, отклонено %s, позиция %s'
-              % (accepted, rejected, store.read_offset()))
-    return accepted, rejected
+                client.progress(task_id, agent_id, 'running', 'агент выполняет задачу')
+            except ClientError as exc:
+                report(quiet, 'стадия running не отправлена: %s' % exc)
+            last_touch = time.time()
+        time.sleep(5.0)
+
+    # Результат не записан: задача закрыта сервером по deadline либо закроется следующим
+    # проходом reclaim. Рабочий каталог оставляем - в нём формулировка и файл ответа,
+    # по которым видно, на чём остановились.
+    report(quiet, 'задача %s: результат не записан за %d с, файл ответа %s'
+           % (task_id, limit, answer_path))
+    return {'task_id': task_id, 'state': 'waiting', 'message': 'результат не записан'}
 
 
-def run_once(store, args):
-    """Один проход: журнал плюс (по ключу --process) доставка задач из inbox."""
-    accepted, rejected = process_journal(store, args.quiet)
-    delivered = 0
-    if args.process:
-        while True:
-            result = agent.process_once(store, args.deliver, not args.no_gui, args.confirm_timeout,
-                                args.attempts)
-            if result is None:
-                break
-            delivered += 1
-            if not args.quiet:
-                print('задача %s: %s (%s)' % (result['task_id'], result['status'],
-                                              result.get('message') or ''))
-    if args.sweep or args.process:
-        marked = agent.sweep(store, args.timeout)
-        if marked and not args.quiet:
-            print('помечено timeout: %s' % len(marked))
-    return {'accepted': accepted, 'rejected': rejected, 'delivered': delivered}
+def run_once(client, cfg, mode, root, allow_gui=True, quiet=False):
+    """Один проход: забрать задачу с сервера и провести её. True - задача была."""
+    agent_id = agent_name(cfg)
+    claimed = client.claim(agent_id, (cfg.get('agent') or {}).get('claim_ttl_s'))
+    task = claimed.get('task')
+    if not task:
+        return False
+    result = handle_task(client, cfg, task, mode, root, allow_gui=allow_gui, quiet=quiet)
+    report(quiet, 'задача %s: %s' % (task['id'], result.get('state')))
+    return True
 
-
-def report_pass_error(store, exc):
-    """Записать сбой прохода в поток и в журнал доставки: watcher не умирает молча."""
-    detail = traceback.format_exc()
-    sys.stderr.write('%s проход не выполнен: %s\n%s' % (now_iso(), exc, detail))
-    sys.stderr.flush()
-    try:
-        store.log_bridge({'event': 'watcher_error',
-                          'error': '%s: %s' % (type(exc).__name__, exc),
-                          'traceback': detail[-2000:]})
-    except Exception:
-        # Журнал недоступен (например, отобрали каталог) - это не повод падать.
-        pass
 
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         prog='watcher.py',
-        description='Watcher очереди: строки журнала queue\\tasks.jsonl превращает в задачи inbox.')
-    parser.add_argument('--root', default=None, help='корень харнесса (по умолчанию - выше integration)')
+        description='Watcher очереди: забирает задачи с сервера и передаёт их в Cline.')
+    parser.add_argument('--root', default=None, help='корень харнесса')
+    parser.add_argument('--config', default=None, help='файл настроек (deploy\\config.json)')
+    parser.add_argument('--server', default=None, help='адрес сервера (agent.server_url)')
+    parser.add_argument('--key', default=None, help='ключ агента (agent.key)')
+    parser.add_argument('--agent', default=None, help='имя агента (agent.name)')
     parser.add_argument('--run', action='store_true', help='работать циклом, а не одним проходом')
-    parser.add_argument('--interval', type=float, default=2.0, help='пауза между проходами цикла, с')
-    parser.add_argument('--process', action='store_true', help='доставлять задачи из inbox в Cline')
-    parser.add_argument('--deliver', default='uri', choices=('uri', 'manual', 'echo', 'auto'),
-                        help='режим доставки: uri (по умолчанию), manual, echo, auto')
-    parser.add_argument('--confirm-timeout', type=float, default=None,
-                        help='сколько секунд ждать подтверждения доставки (по умолчанию 12)')
-    parser.add_argument('--attempts', type=int, default=3,
-                        help='сколько раз открывать ссылку, пока задача не появится в Cline')
-    parser.add_argument('--no-gui', action='store_true', help='не открывать URI (проверка без Cline)')
-    parser.add_argument('--sweep', action='store_true', help='разбирать застрявшие задачи даже без --process')
-    parser.add_argument('--timeout', type=float, default=None, help='порог застревания, с')
-    parser.add_argument('--quiet', action='store_true', help='печатать только итоговые строки')
+    parser.add_argument('--once', action='store_true', help='один проход и выход')
+    parser.add_argument('--deliver', default=None,
+                        choices=('uri', 'manual', 'echo', 'auto'),
+                        help='режим доставки: uri (по умолчанию), manual, echo')
+    parser.add_argument('--interval', type=float, default=0, help='пауза при работе, с')
+    parser.add_argument('--idle-interval', type=float, default=0,
+                        help='пауза, когда очередь пуста, с')
+    parser.add_argument('--no-gui', action='store_true', help='не открывать URI (проверка)')
+    parser.add_argument('--quiet', action='store_true', help='печатать только смену стадий')
     return parser.parse_args(argv)
 
 
 def main(argv=None):
     setup_stdio()
     args = parse_args(argv)
-    store = QueueStore(args.root or project_root())
-    store.ensure()
-    lock = WatcherLock(store)
+    root = project_root(args.root)
+    cfg, _notes = load_config(root, args.config)
+    if args.server:
+        cfg['agent']['server_url'] = args.server
+    if args.key:
+        cfg['agent']['key'] = args.key
+    if args.agent:
+        cfg['agent']['name'] = args.agent
+    if not cfg['agent']['server_url']:
+        raise SystemExit('не задан адрес сервера: agent.server_url в deploy\\config.json '
+                         'или ключ --server')
+    client = IntegrationClient(cfg['agent']['server_url'], cfg['agent']['key'])
+    mode = args.deliver or cfg['agent']['deliver']
+    if mode == 'auto':
+        mode = 'uri'
+    interval = args.interval or cfg['agent']['interval'] or DEFAULT_INTERVAL_S
+    idle = args.idle_interval or cfg['agent']['idle_interval'] or DEFAULT_IDLE_S
+    allow_gui = not args.no_gui
 
     if not args.run:
-        result = run_once(store, args)
-        print('проход завершён: %s' % json.dumps(result, ensure_ascii=False))
+        worked = run_once(client, cfg, mode, root, allow_gui=allow_gui, quiet=args.quiet)
+        if not worked:
+            print('очередь пуста: задач нет')
         return 0
 
+    lock = WatcherLock(root)
     if not lock.acquire():
         print('watcher уже запущен: замок %s свежий' % lock.path)
         print('если процесс убит, замок снимается сам через две минуты')
         return 1
-    print('watcher запущен: журнал %s, режим %s, интервал %.1f с (Ctrl+C - стоп)'
-          % (store.dirs['journal'], args.deliver, args.interval))
+    print('watcher запущен: сервер %s, агент %s, режим %s, пауза %.0f/%.0f с (Ctrl+C - стоп)'
+          % (cfg['agent']['server_url'], agent_name(cfg), mode, interval, idle))
     passes = 0
+    idle_passes = 0
+    last_reclaim = 0.0
     try:
         while True:
             try:
-                result = run_once(store, args)
+                worked = run_once(client, cfg, mode, root, allow_gui=allow_gui,
+                                  quiet=args.quiet)
                 lock.touch()
-                passes += 1
-                if not args.quiet and (result['accepted'] or result['delivered'] or result['rejected']):
-                    print('%s проход %s: %s' % (now_iso(), passes, json.dumps(result, ensure_ascii=False)))
+            except ClientError as exc:
+                print('%s сервер недоступен: %s' % (time.strftime('%H:%M:%S'), exc))
+                worked = False
             except KeyboardInterrupt:
                 raise
-            except Exception as exc:
-                # Сбой одного прохода не завершает watcher: задача, отправленная из окна,
-                # иначе молча остаётся в журнале. Процесс живёт, пока его не погасят явно.
-                report_pass_error(store, exc)
-                if not os.path.isfile(lock.path) and not lock.acquire():
-                    print('замок %s перехвачен другим watcher-ом: останавливаюсь' % lock.path)
-                    return 1
-            time.sleep(max(0.2, args.interval))
+            except Exception as exc:  # noqa: BLE001 - проход не должен убивать watcher
+                print('%s проход не выполнен: %s' % (time.strftime('%H:%M:%S'), exc))
+                sys.stderr.write('%s\n' % traceback.format_exc())
+                worked = False
+            passes += 1
+            if worked:
+                idle_passes = 0
+                time.sleep(max(0.5, interval))
+                continue
+            idle_passes += 1
+            if time.time() - last_reclaim >= RECLAIM_EVERY_S:
+                last_reclaim = time.time()
+                try:
+                    client.reclaim()
+                except ClientError:
+                    pass
+            time.sleep(min(idle, interval * (2 ** min(idle_passes - 1, 3))))
     except KeyboardInterrupt:
         print('остановлено: проходов %s' % passes)
     finally:
@@ -234,3 +298,4 @@ def main(argv=None):
 
 if __name__ == '__main__':
     sys.exit(main())
+

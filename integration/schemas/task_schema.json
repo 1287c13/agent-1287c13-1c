@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Задача внешней интеграции (integration-v1)",
-  "description": "Одна задача: строка журнала queue\\tasks.jsonl, файл queue\\inbox\\task_<id>.json. Проверяет integration\\transport\\schema.py.",
+  "description": "Одна задача: файл очереди inbox\\task_<id>.json на сервере. Проверяет integration\\transport\\schema.py.",
   "type": "object",
   "additionalProperties": true,
   "required": ["id", "created_at", "source", "mode", "role", "action", "prompt"],
@@ -9,7 +9,7 @@
     "id": {
       "type": "string",
       "pattern": "^t-[0-9]{8}-[0-9]{6}-[0-9a-f]{6}$",
-      "description": "Идентификатор задачи: t-<ГГГГММДД>-<ЧЧММСС>-<6 hex>. Его присваивает отправитель (GUI или сервер)."
+      "description": "Идентификатор задачи: t-<ГГГГММДД>-<ЧЧММСС>-<6 hex>. Его присваивает сервер при постановке задачи."
     },
     "created_at": {
       "type": "string",
@@ -18,8 +18,8 @@
     },
     "source": {
       "type": "string",
-      "enum": ["gui", "http", "file", "cli"],
-      "description": "Кто положил задачу в журнал: окно Tkinter, HTTP-сервер, файловый обмен, ручная правка."
+      "enum": ["http", "cli"],
+      "description": "Кто поставил задачу: http (браузер или внешний клиент через сервер), cli (командная строка agent.py). Присваивает сервер."
     },
     "client": {
       "type": "string",
@@ -29,7 +29,7 @@
     "mode": {
       "type": "string",
       "enum": ["db", "harness"],
-      "description": "db - задача по базе 1С (слот <база> обязателен), harness - задача по самому инструменту агента (базы нет). Режим harness принимается только от отправителей машины харнесса (source=cli или file): окно задач и HTTP-сервер такую задачу отклоняют."
+      "description": "db - задача по базе 1С (слот <база> обязателен), harness - задача по самому инструменту агента (базы нет). Режим harness разрешён только клиенту с allow_harness в server.clients."
     },
     "role": {
       "type": "string",
@@ -46,7 +46,7 @@
     "db": {
       "type": ["string", "null"],
       "maxLength": 300,
-      "description": "Слот <база>: id, алиас, name или путь из .v8-project.json. Для mode=harness - null."
+      "description": "Слот <база>: id, алиас, name или путь. Сервер сверяет id со списком server.databases, агент на своей машине разрешает его по .v8-project.json. Для mode=harness - null."
     },
     "goal": {
       "type": "string",

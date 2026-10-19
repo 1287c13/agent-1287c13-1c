@@ -1,22 +1,31 @@
 # -*- coding: utf-8 -*-
-"""HTTP-интерфейс очереди: одна логика для сервера разработки и для WSGI.
+"""HTTP-интерфейс сервера интеграции: очередь, агенты, ответы, страница задач.
 
-Маршруты (те же и у http_server.py, и у wsgi.py):
+Маршруты (одинаковые для WSGI на Passenger и для локального http_server.py):
 
-    GET  /api/health          состояние очереди: счётчики, позиция журнала, жив ли watcher
-    POST /api/task            принять задачу: тело - объект task_schema.json; ответ 202
-    GET  /api/result/<id>     результат задачи: 200 с result_schema.json либо 404 с состоянием
-    GET  /api/answer/<id>     ответ задачи файлом: markdown агента (format=md) или
-                              страница HTML по нему (format=html, по умолчанию)
-    GET  /api/tasks           последние результаты и счётчики
+    GET  /                       страница задач (integration\\web)
+    GET  /app.js, /style.css     её файлы
+    POST /api/auth               проверить ключ (без ключа): кто я и какие базы известны
+    GET  /api/health             состояние очереди и агентов (без ключа)
+    POST /api/task               поставить задачу: 202 {task_id, prompt, status_url}
+    GET  /api/status/<id>        состояние задачи
+    GET  /api/status?ids=a,b     состояния пачки задач (опрос после отправки)
+    GET  /api/history?limit=     последние задачи
+    GET  /api/answer/<id>        ответ задачи: format=md (по умолчанию) или html
+    GET  /api/agents             отметки агентов
+    GET  /api/config             список баз и публичный адрес (после входа)
+    GET  /api/events?limit=      последние события очереди
+    POST /api/agent/claim        агент берёт задачу (ключ агента)
+    POST /api/agent/progress     стадия задачи: claimed/delivered/running
+    POST /api/agent/result       итог задачи: done/error/failed/timeout
+    POST /api/agent/reclaim      вернуть задачи с истёкшим claim, закрыть просроченные
 
-Почему приём задачи не кладёт её сразу в inbox: сервер и watcher - разные процессы, а
-порядок разбора очереди держит один watcher. Сервер дописывает строку в журнал и
-отвечает 202, а задача появляется в inbox следующим проходом watcher-а. Это делает
-поведение одинаковым для HTTP, файлового обмена и ручной правки журнала.
+Почему ключ, а не токен в теле: клиент определяется по ключу, и поле client в задаче
+присваивает сервер. Иначе отправитель мог бы назваться чужим именем, а журнал задач
+перестал бы отвечать на вопрос «кто это поставил».
 
-413 и 400 различаются: пустое тело или необъект JSON - 400, несоответствие схеме -
-400 с перечнем ошибок, слишком большое тело - 413 (проверяет транспорт).
+Почему стадии считает сервер: браузер не запрашивает ничего на простое. Он опрашивает
+статус только тех задач, которые сам поставил, и только пока они не завершены.
 """
 
 import json
@@ -28,140 +37,344 @@ _INTEGRATION = os.path.dirname(_HERE)
 if _INTEGRATION not in sys.path:
     sys.path.insert(0, _INTEGRATION)
 
-from task import errors_to_text, save_rejected, validate_task  # noqa: E402
-from transport.store import QueueStore  # noqa: E402
-
 import md_to_html  # noqa: E402
+from task import errors_to_text, validate_shape  # noqa: E402
+from transport.config import (client_by_key, load_config, project_root,  # noqa: E402
+                              public_server_view)
+from transport.store import (DEFAULT_CLAIM_TTL_S, QueueStore, preview,  # noqa: E402
+                             safe_name)
 
-WATCHER_ALIVE_S = 15.0
+WEB_DIR = os.path.join(_INTEGRATION, 'web')
+STATIC_TYPES = {
+    'index.html': 'text/html; charset=utf-8',
+    'app.js': 'application/javascript; charset=utf-8',
+    'style.css': 'text/css; charset=utf-8',
+}
+MAX_STATUS_IDS = 100
+
+
+class Response(object):
+    """Ответ транспорту: либо JSON-объект, либо готовые байты (статика)."""
+
+    def __init__(self, status=200, payload=None, body=None,
+                 content_type='application/json; charset=utf-8', headers=None):
+        self.status = status
+        self.payload = payload
+        self.body = body
+        self.content_type = content_type
+        self.headers = dict(headers or {})
+
+    def to_bytes(self):
+        if self.body is not None:
+            return self.body
+        if self.payload is None:
+            return b''
+        return json.dumps(self.payload, ensure_ascii=False, indent=2).encode('utf-8')
+
 
 
 class Api(object):
-    """Логика HTTP-интерфейса поверх QueueStore."""
+    """Логика сервера поверх QueueStore."""
 
-    def __init__(self, root=None, token=None):
-        self.root = os.path.abspath(root or os.path.dirname(_INTEGRATION))
-        self.store = QueueStore(self.root)
+    def __init__(self, root=None, config=None, config_path=None):
+        self.root = project_root(root)
+        if config is None:
+            config, _notes = load_config(self.root, config_path)
+        self.config = config
+        self.store = QueueStore(config['server']['root'])
         self.store.ensure()
-        # Токен доступа: если задан, любой маршрут требует его в заголовке
-        # X-Integration-Token или в параметре token. Нужен на хостинге: открытый
-        # POST /api/task пускает чужой текст прямо в задачу агента.
-        self.token = token if token is not None else (os.environ.get('INTEGRATION_TOKEN') or None)
+
+    # --- вспомогательное -----------------------------------------------------
+
+    def _origin(self):
+        return (self.config.get('server') or {}).get('cors_origin') or '*'
+
+    def _json(self, status, payload):
+        return Response(status, payload=payload)
+
+    @staticmethod
+    def _token(headers, query):
+        """Ключ из X-Integration-Token либо Authorization: Bearer."""
+        headers = headers or {}
+        token = headers.get('x-integration-token') or headers.get('X-Integration-Token') or ''
+        if not token:
+            auth = headers.get('authorization') or headers.get('Authorization') or ''
+            if auth.lower().startswith('bearer '):
+                token = auth[7:].strip()
+        if not token:
+            token = ((query or {}).get('token') or [''])[0]
+        return token
+
+    def _client(self, headers, query):
+        """Клиент по ключу. (клиент_или_None, ответ_об_ошибке_или_None)."""
+        clients = (self.config.get('server') or {}).get('clients') or []
+        if not clients:
+            return None, self._json(503, {
+                'error': 'сервер не настроен: в deploy\\config.json нет server.clients',
+                'hint': 'скопируйте deploy\\config.example.json и задайте ключи клиентов'})
+        client = client_by_key(self.config, self._token(headers, query))
+        if client is None:
+            return None, self._json(401, {
+                'error': 'ключ доступа не подходит',
+                'hint': 'заголовок X-Integration-Token или Authorization: Bearer'})
+        return client, None
 
     # --- маршруты ------------------------------------------------------------
 
     def health(self):
+        """Состояние сервера: счётчики, агенты, замечания настроек. Без путей."""
         counts = self.store.counts()
-        age = counts.get('watcher_age_s')
-        if age is None:
-            watcher = {'alive': False, 'message': 'отметки нет: watcher не проходил ни разу'}
-        else:
-            alive = age <= WATCHER_ALIVE_S
-            watcher = {'alive': alive, 'age_s': round(age, 1),
-                       'message': 'watcher отвечает' if alive else 'watcher молчит: задачи не разбираются'}
-        return 200, {
+        agents = [{k: a.get(k) for k in ('name', 'state', 'task_id', 'updated_at', 'age_s', 'alive')}
+                  for a in self.store.agents()]
+        return self._json(200, {
             'status': 'ok',
-            'root': self.root,
-            'queue': self.store.rel(self.store.base),
-            'watcher': watcher,
-            'counts': counts,
-        }
+            'version': 'integration-v2',
+            'queue': counts,
+            'agents': agents,
+            'notes': list(self.config.get('notes') or []),
+        })
 
-    def submit(self, payload, source='http'):
-        """Принять задачу: проверка, строка в журнал, ответ 202."""
-        if not isinstance(payload, dict):
-            return 400, {'error': 'тело запроса должно быть объектом JSON'}
-        payload.setdefault('source', source)
-        task, errors = validate_task(self.root, payload)
+    def auth(self, payload):
+        """Проверка ключа: клиент, разрешение задач по харнессу, список баз."""
+        clients = (self.config.get('server') or {}).get('clients') or []
+        if not clients:
+            return self._json(503, {'ok': False,
+                                     'error': 'на сервере не задан ни один клиентский ключ'})
+        key = ''
+        if isinstance(payload, dict):
+            key = str(payload.get('key') or '')
+        client = client_by_key(self.config, key)
+        if client is None:
+            return self._json(401, {'ok': False, 'error': 'ключ доступа не подходит'})
+        view = public_server_view(self.config)
+        view.update({'ok': True, 'client': client.get('name'),
+                     'allow_harness': bool(client.get('allow_harness'))})
+        return self._json(200, view)
+
+    def server_config(self):
+        """Что нужно форме после входа: базы, публичный адрес, версия."""
+        return self._json(200, public_server_view(self.config))
+
+    def agents(self):
+        return self._json(200, {'items': self.store.agents()})
+
+    def events(self, query):
+        try:
+            limit = int(((query or {}).get('limit') or ['50'])[0])
+        except (ValueError, TypeError, IndexError):
+            limit = 50
+
+    def submit(self, payload, client):
+        """Принять задачу от клиента: проверка формы, запись в inbox, ответ 202."""
+        task, errors = validate_shape(self.config, payload, client)
         if errors:
-            save_rejected(self.store, task, errors, payload)
-            self.store.log_bridge({'event': 'rejected', 'task_id': task.get('id'),
-                                   'errors': errors, 'source': source})
-            return 400, {'error': 'задача не принята', 'task_id': task.get('id'),
-                         'errors': errors, 'text': errors_to_text(task, errors)}
-        self.store.append_journal(task)
-        self.store.log_bridge({'event': 'submitted', 'task_id': task['id'], 'source': source})
-        return 202, {
-            'task_id': task['id'],
-            'state': 'queued',
-            'prompt': task['prompt'],
-            'result_url': '/api/result/%s' % task['id'],
-            'hint': 'watcher разложит задачу в inbox и передаст её в Cline; результат - по result_url',
-        }
+            task_id = (task or {}).get('id')
+            self.store.reject(payload, errors, task_id)
+            return self._json(400, {
+                'error': 'задача не принята',
+                'task_id': task_id,
+                'errors': errors,
+                'text': errors_to_text(task, errors),
+            })
+        stored = self.store.enqueue(task)
+        return self._json(202, {
+            'task_id': stored['id'],
+            'state': stored.get('state'),
+            'prompt': stored.get('prompt'),
+            'created_at': stored.get('created_at'),
+            'status_url': '/api/status/%s' % stored['id'],
+        })
 
-    def result(self, task_id):
-        found = self.store.result(task_id)
-        if found is not None:
-            return 200, found
-        state = self.store.state(task_id)
-        if state == 'unknown' and not self.store.journal_has(task_id):
-            return 404, {'task_id': task_id, 'state': 'unknown',
-                         'message': 'задачи с таким идентификатором нет'}
-        return 404, {'task_id': task_id, 'state': state,
-                     'message': 'результат ещё не записан'}
+    def status(self, task_id):
+        item = self.store.status(task_id)
+        if item is None:
+            return self._json(404, {'error': 'задачи с таким идентификатором нет',
+                                    'task_id': task_id})
+        return self._json(200, item)
 
-    def answer(self, task_id, kind='html'):
-        """Ответ задачи файлом: markdown агента или страница HTML по нему.
+    def statuses(self, query):
+        raw = ((query or {}).get('ids') or [''])[0]
+        ids = [x.strip() for x in raw.split(',') if x.strip()][:MAX_STATUS_IDS]
+        if not ids:
+            return self._json(400, {'error': 'не задан параметр ids'})
+        items = self.store.statuses(ids)
+        found = set(item['task_id'] for item in items)
+        return self._json(200, {'items': items,
+                                'missing': [x for x in ids if x not in found]})
 
-        Формат ответа агента - markdown (queue\\answers\\answer_<id>.md): он читается
-        человеком и правится руками. HTML собирается по нему здесь, в момент запроса -
-        страница нужна для скачивания, а не для хранения.
-        """
-        kind = 'md' if (kind or '').lower() in ('md', 'markdown') else 'html'
-        text = ''
-        source = self.store.answer_path(task_id)
-        if os.path.isfile(source):
-            with open(source, 'r', encoding='utf-8') as f:
-                text = f.read()
-        if not text:
-            result = self.store.result(task_id) or {}
-            text = result.get('answer') or ''
-        if not text:
-            return 404, {'task_id': task_id, 'state': self.store.state(task_id),
-                         'error': 'ответ ещё не записан'}
+    def history(self, query):
+        try:
+            limit = int(((query or {}).get('limit') or ['20'])[0])
+        except (ValueError, TypeError, IndexError):
+            limit = 20
+        limit = max(1, min(200, limit))
+        return self._json(200, {'counts': self.store.counts(),
+                                'items': self.store.recent(limit)})
+
+    def answer(self, task_id, query):
+        kind = (((query or {}).get('format') or ['md'])[0] or 'md').lower()
+        kind = 'html' if kind in ('html', 'page') else 'md'
+        result = self.store.result(task_id)
+        if not result:
+            current = self.store.status(task_id)
+            if current is None:
+                return self._json(404, {'error': 'задачи с таким идентификатором нет'})
+            return self._json(404, {'error': 'ответ ещё не записан',
+                                    'task_id': task_id, 'state': current.get('state')})
+        text = result.get('answer') or ''
         if kind == 'html':
             content = md_to_html.render(text, title='Ответ задачи %s' % task_id,
-                                       source='задача %s из очереди интеграции' % task_id)
+                                        source='задача %s из очереди интеграции' % task_id)
         else:
             content = text
-        return 200, {'task_id': task_id, 'format': kind,
-                     'file_name': md_to_html.answer_file_name(task_id, kind),
-                     'content': content}
+        return self._json(200, {'task_id': task_id, 'format': kind,
+                                'file_name': md_to_html.answer_file_name(task_id, kind),
+                                'content': content})
 
-    def tasks(self, limit=20):
-        return 200, {'counts': self.store.counts(), 'results': self.store.recent_results(limit)}
 
-    def dispatch(self, method, path, payload=None, query=None, token=None):
-        """Маршрутизация. Возвращает (код, объект ответа)."""
+    # --- работа агента -------------------------------------------------------
+
+    def claim(self, payload, client):
+        """Агент берёт задачу. Пустая очередь - task=None и подсказка паузы."""
+        payload = payload if isinstance(payload, dict) else {}
+        agent = safe_name(str(payload.get('agent') or client.get('name') or 'agent'))
+        try:
+            ttl = int(payload.get('ttl_s') or DEFAULT_CLAIM_TTL_S)
+        except (TypeError, ValueError):
+            ttl = DEFAULT_CLAIM_TTL_S
+        ttl = max(30, min(3600, ttl))
+        task = self.store.claim(agent, ttl)
+        if task is None:
+            return self._json(200, {'task': None, 'agent': agent, 'retry_after_s': 5})
+        task['claim'] = {'agent': agent, 'expires_ts': task.get('claim_expires_ts'),
+                         'ttl_s': task.get('claim_ttl_s'),
+                         'attempts': task.get('attempts')}
+        return self._json(200, {'task': task, 'agent': agent})
+
+    def progress(self, payload, client):
+        """Стадия задачи от агента: delivered, running (и продление claim)."""
+        payload = payload if isinstance(payload, dict) else {}
+        task_id = str(payload.get('id') or '')
+        stage = str(payload.get('stage') or '')
+        agent = safe_name(str(payload.get('agent') or client.get('name') or 'agent'))
+        accepted, note, task = self.store.progress(task_id, agent, stage,
+                                                   str(payload.get('message') or ''))
+        if task is None:
+            return self._json(404, {'error': note or 'задача не найдена', 'task_id': task_id})
+        state = (task or {}).get('state') or ''
+        if accepted and state in ('done', 'error', 'failed', 'timeout'):
+            return self._json(409, {'error': 'задача уже завершена: %s' % state,
+                                    'task_id': task_id, 'state': state})
+        return self._json(200, {'task_id': task_id, 'state': state, 'accepted': accepted,
+                                'note': note})
+
+    def result(self, payload, client):
+        """Итог задачи от агента: ответ, поля отчёта, статус."""
+        payload = payload if isinstance(payload, dict) else {}
+        task_id = str(payload.get('id') or '')
+        agent = safe_name(str(payload.get('agent') or client.get('name') or 'agent'))
+        status = str(payload.get('status') or 'done').lower()
+        if status not in ('done', 'error', 'failed', 'timeout'):
+            return self._json(400, {'error': 'недопустимый статус результата: %s' % status,
+                                    'task_id': task_id})
+        fields = {key: payload.get(key) for key in
+                  ('layer', 'mcp', 'skills', 'verification', 'done', 'not_verified',
+                   'delivery', 'confirmed', 'cline_session', 'cline_note')
+                  if payload.get(key) is not None}
+        stored = self.store.complete(task_id, agent, status,
+                                     str(payload.get('answer') or ''),
+                                     fields, str(payload.get('message') or ''))
+        if stored is None:
+            return self._json(409, {'error': 'задача не найдена или уже завершена',
+                                    'task_id': task_id})
+        return self._json(200, {'task_id': task_id, 'state': stored.get('status'),
+                                'finished_at': stored.get('finished_at'),
+                                'duration_s': stored.get('duration_s')})
+
+    def reclaim(self):
+        """Вернуть задачи с истёкшим claim и закрыть просроченные."""
+        actions = self.store.reclaim_stale()
+        timed_out = self.store.sweep_timeouts()
+        return self._json(200, {'reclaimed': actions, 'timed_out': timed_out})
+
+
+    # --- статика -------------------------------------------------------------
+
+    def _static(self, name):
+        """Файл страницы задач из integration\\web."""
+        path = os.path.join(WEB_DIR, name)
+        if not os.path.isfile(path):
+            return None
+        with open(path, 'rb') as f:
+            body = f.read()
+        return Response(200, body=body,
+                        content_type=STATIC_TYPES.get(name, 'application/octet-stream'))
+
+    # --- маршрутизация -------------------------------------------------------
+
+    def dispatch(self, method, path, payload=None, query=None, headers=None):
+        """Маршрутизация. Возвращает Response; исключения обрабатывает транспорт."""
         method = (method or 'GET').upper()
         clean = '/' + (path or '/').strip('/')
-        if self.token and method != 'OPTIONS':
-            given = token or ((query or {}).get('token') or [None])[0]
-            if given != self.token:
-                return 401, {'error': 'нужен заголовок X-Integration-Token'}
+        if method == 'OPTIONS':
+            return Response(204)
+        if method in ('GET', 'HEAD'):
+            if clean in ('/', '/index.html'):
+                page = self._static('index.html')
+                if page is not None:
+                    return page
+                return Response(404, body=('нет файла страницы задач: integration\\web\\index.html'
+                                           ).encode('utf-8'),
+                                content_type='text/plain; charset=utf-8')
+            for name in ('app.js', 'style.css'):
+                if clean == '/' + name:
+                    found = self._static(name)
+                    if found is not None:
+                        return found
+            if clean == '/favicon.ico':
+                return Response(204)
         if clean == '/api/health' and method in ('GET', 'HEAD'):
             return self.health()
+        if clean == '/api/auth' and method == 'POST':
+            return self.auth(payload)
+        if not clean.startswith('/api/'):
+            return self._json(404, {'error': 'неизвестный маршрут',
+                                    'path': clean, 'method': method})
+
+        client, error = self._client(headers, query)
+        if error is not None:
+            return error
+
+        if clean == '/api/config' and method in ('GET', 'HEAD'):
+            return self.server_config()
         if clean == '/api/task' and method == 'POST':
-            return self.submit(payload)
-        if clean == '/api/tasks' and method == 'GET':
-            limit = 20
-            try:
-                limit = int((query or {}).get('limit', ['20'])[0])
-            except (ValueError, TypeError, IndexError):
-                limit = 20
-            return self.tasks(max(1, min(200, limit)))
-        prefix = '/api/result/'
+            return self.submit(payload, client)
+        if clean == '/api/history' and method in ('GET', 'HEAD'):
+            return self.history(query)
+        if clean == '/api/status' and method in ('GET', 'HEAD'):
+            return self.statuses(query)
+        if clean == '/api/agents' and method in ('GET', 'HEAD'):
+            return self.agents()
+        if clean == '/api/events' and method in ('GET', 'HEAD'):
+            return self.events(query)
+        prefix = '/api/status/'
         if clean.startswith(prefix) and method in ('GET', 'HEAD'):
-            return self.result(clean[len(prefix):])
+            return self.status(clean[len(prefix):])
         prefix = '/api/answer/'
         if clean.startswith(prefix) and method in ('GET', 'HEAD'):
-            kind = ((query or {}).get('format') or ['html'])[0]
-            return self.answer(clean[len(prefix):], kind)
-        if method == 'OPTIONS':
-            return 204, None
-        return 404, {'error': 'неизвестный маршрут', 'path': clean, 'method': method}
+            return self.answer(clean[len(prefix):], query)
+        if clean == '/api/agent/claim' and method == 'POST':
+            return self.claim(payload, client)
+        if clean == '/api/agent/progress' and method == 'POST':
+            return self.progress(payload, client)
+        if clean == '/api/agent/result' and method == 'POST':
+            return self.result(payload, client)
+        if clean == '/api/agent/reclaim' and method == 'POST':
+            return self.reclaim()
+        return self._json(404, {'error': 'неизвестный маршрут',
+                                'path': clean, 'method': method})
 
 
-def dumps(obj, indent=None):
-    """JSON в UTF-8 байтах: кириллица не экранируется."""
-    return json.dumps(obj, ensure_ascii=False, indent=indent).encode('utf-8')
+def make_api(root=None, config=None, config_path=None):
+    """Собрать Api один раз на процесс."""
+    return Api(root=root, config=config, config_path=config_path)
