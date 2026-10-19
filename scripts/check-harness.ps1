@@ -43,6 +43,77 @@ function Warn ($m) { Write-Host "  [warn] $m" -ForegroundColor Yellow }
 function Info ($m) { Write-Host "  [info] $m" -ForegroundColor DarkGray }
 function Head ($m) { Write-Host ''; Write-Host "== $m" -ForegroundColor Cyan }
 
+# Грубая проверка JS на обрыв: баланс скобок вне строк, комментариев и regex-литералов.
+# Полный разбор не нужен: ловится потерянная "}" или незакрытая строка - файл внешне
+# на месте, а страница не работает вовсе (SyntaxError в консоли браузера).
+function Get-JsSourceProblem {
+    param([string] $Text)
+    $round = 0; $curly = 0; $square = 0
+    $state = 'code'
+    $prev = ''
+    $line = 1
+    $problem = ''
+    $inClass = $false
+    $i = 0
+    while ($i -lt $Text.Length) {
+        $ch = $Text[$i]
+        $next = ''
+        if ($i + 1 -lt $Text.Length) { $next = $Text[$i + 1] }
+        if ($ch -eq "`n") {
+            $line++
+            if ($state -eq 'line') { $state = 'code' }
+            $i++
+            continue
+        }
+        if ($state -eq 'line') { $i++; continue }
+        if ($state -eq 'block') {
+            if ($ch -eq '*' -and $next -eq '/') { $state = 'code'; $i += 2; continue }
+            $i++
+            continue
+        }
+        if ($state -eq 'single' -or $state -eq 'double' -or $state -eq 'template') {
+            if ($ch -eq '\') { $i += 2; continue }
+            $quote = ''''
+            if ($state -eq 'double') { $quote = '"' }
+            if ($state -eq 'template') { $quote = '`' }
+            if ($ch -eq $quote) { $state = 'code' }
+            $i++
+            continue
+        }
+        if ($state -eq 'regex') {
+            if ($ch -eq '\') { $i += 2; continue }
+            if ($ch -eq '[') { $inClass = $true }
+            elseif ($ch -eq ']') { $inClass = $false }
+            elseif ($ch -eq '/' -and -not $inClass) { $state = 'code'; $prev = '/' }
+            $i++
+            continue
+        }
+        if ($ch -eq '/' -and $next -eq '/') { $state = 'line'; $i += 2; continue }
+        if ($ch -eq '/' -and $next -eq '*') { $state = 'block'; $i += 2; continue }
+        if ($ch -eq "'") { $state = 'single'; $i++; continue }
+        if ($ch -eq '"') { $state = 'double'; $i++; continue }
+        if ($ch -eq '`') { $state = 'template'; $i++; continue }
+        if ($ch -eq '/' -and ($prev -eq '' -or '=(:,[!&|?{};+-*%^~<>'.IndexOf($prev) -ge 0)) {
+            $state = 'regex'; $inClass = $false; $i++
+            continue
+        }
+        if ($ch -eq '{') { $curly++ }
+        elseif ($ch -eq '}') { $curly--; if ($curly -lt 0 -and -not $problem) { $problem = "лишняя } на строке $line" } }
+        elseif ($ch -eq '(') { $round++ }
+        elseif ($ch -eq ')') { $round--; if ($round -lt 0 -and -not $problem) { $problem = "лишняя ) на строке $line" } }
+        elseif ($ch -eq '[') { $square++ }
+        elseif ($ch -eq ']') { $square--; if ($square -lt 0 -and -not $problem) { $problem = "лишняя ] на строке $line" } }
+        if (-not [string]::IsNullOrWhiteSpace([string]$ch)) { $prev = [string]$ch }
+        $i++
+    }
+    if (-not $problem -and $state -ne 'code') { $problem = 'файл обрывается внутри строки или комментария' }
+    if (-not $problem -and ($curly -ne 0 -or $round -ne 0 -or $square -ne 0)) {
+        $problem = "не сходятся скобки: { = $curly, ( = $round, [ = $square"
+    }
+    return $problem
+}
+
+
 Write-Host "Харнесс: $Root"
 
 # --- 1. Файл настроек MCP ---------------------------------------------------
@@ -265,6 +336,13 @@ $layerFiles = @('integration\agent.py', 'integration\watcher.py', 'integration\b
 $layerMissing = @($layerFiles | Where-Object { -not (Test-Path (Join-Path $Root $_)) })
 if ($layerMissing.Count -eq 0) { Ok 'файлы слоя на месте (сервер, страница задач, агент, watcher, установка)' }
 else { Bad "нет файлов внешней интеграции: $($layerMissing -join ', ')" }
+
+$pageScript = Join-Path $Root 'integration\web\app.js'
+if (Test-Path $pageScript) {
+    $jsProblem = Get-JsSourceProblem (Get-Content $pageScript -Raw -Encoding UTF8)
+    if ($jsProblem) { Bad "страница задач не разберётся браузером: app.js - $jsProblem" }
+    else { Ok 'страница задач: скобки и строки app.js сходятся' }
+}
 
 $deployConfig = Join-Path $Root 'deploy\config.json'
 $serverRoot = ''
