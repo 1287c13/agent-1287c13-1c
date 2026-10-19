@@ -15,11 +15,32 @@
   var STORE = {
     keys: 'integration.keys',
     active: 'integration.activeKey',
-    url: 'integration.serverUrl'
+    legacyUrl: 'integration.serverUrl'
   };
   var POLL_DELAYS = [3000, 5000, 10000, 20000, 30000];
+
+  /*
+   * Адрес API не спрашивается и не хранится: страницу отдал сам сервер, значит её адрес
+   * и есть адрес очереди. Берётся каталог страницы, а не только origin: под Passenger
+   * сайт может жить не в корне домена (/agent, /agent/, /agent/index.html), и /api/...
+   * должен уходить туда же.
+   */
+  var BASE = (function () {
+    if (!/^https?:$/.test(window.location.protocol)) { return ''; }
+    var path = window.location.pathname || '/';
+    var last = path.slice(path.lastIndexOf('/') + 1);
+    var dir;
+    if (!last) {
+      dir = path.replace(/\/+$/, '');
+    } else if (last.indexOf('.') < 0) {
+      dir = path;
+    } else {
+      dir = path.slice(0, path.length - last.length - 1);
+    }
+    return window.location.origin + dir;
+  })();
+
   var state = {
-    url: '',
     key: '',
     client: '',
     allowHarness: false,
@@ -156,7 +177,7 @@
     if (state.key) {
       headers['X-Integration-Token'] = state.key;
     }
-    return fetch(state.url + path, {
+    return fetch(BASE + path, {
       method: options.method || 'GET',
       headers: headers,
       body: options.body === undefined ? undefined : JSON.stringify(options.body)
@@ -179,20 +200,15 @@
     });
   }
 
-  function serverUrl() {
-    return (el('server-url').value || '').trim().replace(/\/+$/, '');
-  }
-
   // --- вход и форма ---------------------------------------------------------
 
   function connect(silent) {
-    state.url = serverUrl();
-    state.key = el('api-key').value || '';
-    if (!state.url) {
-      setText('conn-state', 'укажите адрес сервера', 'bad');
+    if (!BASE) {
+      setText('conn-state', 'страница открыта не с сервера: адрес очереди неизвестен. ' +
+        'Откройте адрес сервера в браузере', 'bad');
       return Promise.resolve(false);
     }
-    localStorage.setItem(STORE.url, state.url);
+    state.key = el('api-key').value || '';
     setText('conn-state', 'проверяю ключ…');
     return api('/api/auth', { method: 'POST', body: { key: state.key } }).then(function (data) {
       state.client = data.client || '';
@@ -413,8 +429,7 @@
   // --- запуск ---------------------------------------------------------------
 
   document.addEventListener('DOMContentLoaded', function () {
-    var savedUrl = localStorage.getItem(STORE.url) || '';
-    el('server-url').value = savedUrl || (location.origin.indexOf('http') === 0 ? location.origin : '');
+    localStorage.removeItem(STORE.legacyUrl);
     var active = localStorage.getItem(STORE.active) || '';
     el('api-key').value = active;
     state.key = active;
@@ -434,7 +449,7 @@
       }
     });
 
-    if (savedUrl && active) {
+    if (active) {
       connect(true);
     }
   });

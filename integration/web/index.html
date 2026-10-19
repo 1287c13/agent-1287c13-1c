@@ -15,17 +15,16 @@
   </header>
 
   <section class="card" id="auth-card">
-    <h2>Подключение</h2>
+    <h2>Вход</h2>
     <div class="row">
-      <label>Адрес сервера
-        <input id="server-url" type="text" placeholder="https://example.org/agent" spellcheck="false">
-      </label>
       <label>Ключ доступа
         <input id="api-key" type="password" placeholder="ключ клиента" autocomplete="off">
       </label>
       <button id="btn-connect" type="button">Войти</button>
       <span id="conn-state" class="state"></span>
     </div>
+    <p class="state">Адрес сервера не спрашивается: страница получена с него же, поэтому
+      запросы идут по её собственному адресу. Достаточно ключа клиента.</p>
     <p class="warn">Ключ хранится в localStorage браузера открытым текстом: любой, у кого
       есть доступ к этому профилю, сможет поставить задачу. На общем компьютере ключ
       не сохраняйте, а после работы нажмите «Забыть все ключи».</p>
