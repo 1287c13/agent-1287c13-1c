@@ -1,14 +1,3 @@
-# -*- coding: utf-8 -*-
-"""HTTP-клиент интеграции: единственный путь агента и командной строки к серверу.
-
-Все обращения к очереди идут через сервер: агент не читает и не пишет каталог
-очереди на чужой машине. Клиент знает три вещи - адрес, свой ключ и формат JSON.
-
-Ключ уходит заголовком X-Integration-Token. Ошибка HTTP с телом JSON не теряется:
-сервер отвечает причиной (какой слот не заполнен, почему задача отклонена), и
-клиент возвращает её вызывающему вместе с кодом.
-"""
-
 import json
 import socket
 import urllib.error
@@ -19,11 +8,10 @@ DEFAULT_TIMEOUT_S = 60.0
 
 
 class ClientError(Exception):
-    """Сервер недоступен или ответ не разобран."""
+    pass
 
 
 class IntegrationClient(object):
-    """Клиент сервера интеграции: адрес плюс ключ доступа."""
 
     def __init__(self, base_url, key='', timeout=DEFAULT_TIMEOUT_S):
         base = (base_url or '').strip().rstrip('/')
@@ -33,7 +21,6 @@ class IntegrationClient(object):
         self.key = key or ''
         self.timeout = timeout
 
-    # --- транспорт -----------------------------------------------------------
 
     def _request(self, method, path, payload=None, query=None):
         url = self.base + path
@@ -81,40 +68,32 @@ class IntegrationClient(object):
             raise ClientError('HTTP %s: %s' % (status, message or 'запрос отклонён'))
         return body
 
-    # --- маршруты ------------------------------------------------------------
 
     def auth(self):
-        """Проверить ключ: кто я для сервера и какие базы он знает."""
         return self._call('POST', '/api/auth', {'key': self.key})
 
     def health(self):
-        """Состояние сервера: счётчики очереди и живые агенты (без ключа)."""
         return self._call('GET', '/api/health')
 
     def submit(self, fields):
-        """Поставить задачу. Возвращает ответ сервера с task_id и формулировкой."""
         return self._call('POST', '/api/task', fields, expect=(202,))
 
     def claim(self, agent, ttl_s=None):
-        """Взять задачу. Поле task в ответе равно None, если очередь пуста."""
         return self._call('POST', '/api/agent/claim',
                           {'agent': agent, 'ttl_s': ttl_s})
 
     def progress(self, task_id, agent, stage, message=''):
-        """Отметить стадию задачи и продлить claim."""
         return self._call('POST', '/api/agent/progress',
                           {'id': task_id, 'agent': agent, 'stage': stage,
                            'message': message})
 
     def result(self, task_id, agent, status='done', answer='', fields=None, message=''):
-        """Записать итог задачи. Успех - задача закрыта сервером."""
         payload = {'id': task_id, 'agent': agent, 'status': status,
                    'answer': answer, 'message': message}
         payload.update(fields or {})
         return self._call('POST', '/api/agent/result', payload)
 
     def reclaim(self):
-        """Вернуть в очередь задачи с истёкшим claim и закрыть просроченные."""
         return self._call('POST', '/api/agent/reclaim', {})
 
     def status(self, task_id):
@@ -132,7 +111,3 @@ class IntegrationClient(object):
 
     def agents(self):
         return self._call('GET', '/api/agents')
-
-    def server_config(self):
-        """Список баз и публичный адрес - после входа."""
-        return self._call('GET', '/api/config')

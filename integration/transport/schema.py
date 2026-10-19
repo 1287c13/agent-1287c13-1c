@@ -1,16 +1,3 @@
-# -*- coding: utf-8 -*-
-"""Мини-валидатор JSON Schema (подмножество draft-07) для схем integration\\schemas\\.
-
-Поддержано ровно то, что использовано в схемах очереди: type (в том числе список
-типов), required, properties, additionalProperties, pattern, minLength, maxLength,
-enum, items. Полная реализация спецификации не нужна: валидатор стоит между
-отправителем задачи и агентом, а не между произвольным клиентом и сервером.
-
-Проверять надо по той же схеме, что лежит в integration\\schemas\\: файл схемы - это
-документ для человека и одновременно источник правил для проверки, поэтому они не
-расходятся. Загрузка - read_schema(), проверка - validate().
-"""
-
 import json
 import re
 
@@ -26,18 +13,15 @@ TYPES = {
 
 
 def read_schema(path):
-    """Прочитать файл схемы. Отсутствие файла - ошибка вызывающего кода, не валидатора."""
     with open(path, 'r', encoding='utf-8') as f:
         return json.load(f)
 
 
 def format_errors(errors):
-    """Ошибки в одну строку для сообщения очереди."""
     return '; '.join(errors)
 
 
 def validate(instance, schema, where=''):
-    """Вернуть список сообщений об ошибках. Пустой список - объект схеме соответствует."""
     errors = []
     if not isinstance(schema, dict):
         return errors
@@ -46,7 +30,6 @@ def validate(instance, schema, where=''):
     if expected is not None:
         names = expected if isinstance(expected, list) else [expected]
         if isinstance(instance, bool) and 'boolean' not in names:
-            # bool в Python - подкласс int: без этой оговорки True прошёл бы как integer.
             errors.append('%s: ожидается %s, пришло boolean' % (where or 'значение', '/'.join(names)))
             return errors
         if not any(isinstance(instance, TYPES[n]) for n in names if n in TYPES):

@@ -1,32 +1,3 @@
-# -*- coding: utf-8 -*-
-"""Watcher очереди: единственный процесс, который забирает задачи с сервера и ведёт их.
-
-Очередь живёт на сервере (server.root). Watcher стоит на машине агента и делает
-три вещи:
-
-    1. claim  - просит у сервера следующую задачу;
-    2. доставка - передаёт её в Cline (bridge.py), отмечая стадии delivered/running;
-    3. ожидание - ждёт, пока выполняющий задачу Cline запишет результат командой
-       integration\\agent.py --write-result, и убирает рабочий каталог задачи.
-
-Всё, что watcher держит у себя, - рабочий каталог temp\\queue\\<id>\\ на время задачи:
-prompt.txt с формулировкой и answer.md, который заполняет агент. После записи
-результата каталог удаляется: второго каталога очереди на машине агента нет.
-
-Почему ожидание, а не повторный опрос результатов Cline: результат пишет сам агент,
-выполнивший задачу, - он знает, что проверено, и заполняет строки отчёта. Watcher не
-угадывает по журналу Cline, закончилась ли работа, а ждёт явной записи результата.
-
-Простой: нет задач - пауза растёт 2 -> 5 -> 15 с, чтобы не дёргать сервер впустую.
-Пока watcher простаивает, он раз в минуту просит сервер вернуть задачи с истёкшим
-claim (умерший агент не должен держать задачу вечно).
-
-Запуск:
-
-    py -3 integration\\watcher.py --run                  цикл
-    py -3 integration\\watcher.py --once --deliver echo   один проход без Cline (проверка)
-"""
-
 import argparse
 import json
 import os
@@ -39,11 +10,11 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
-import agent  # noqa: E402
-import bridge  # noqa: E402
-from transport.client import ClientError, IntegrationClient  # noqa: E402
-from transport.config import agent_name, load_config, project_root  # noqa: E402
-from transport.store import setup_stdio  # noqa: E402
+import agent
+import bridge
+from transport.client import ClientError, IntegrationClient
+from transport.config import agent_name, load_config, project_root
+from transport.store import setup_stdio
 
 DEFAULT_INTERVAL_S = 2.0
 DEFAULT_IDLE_S = 15.0
@@ -53,7 +24,6 @@ PROGRESS_EVERY_S = 30.0
 
 
 class WatcherLock(object):
-    """Замок на единственный экземпляр watcher-а на машине агента."""
 
     def __init__(self, root):
         self.path = os.path.join(root, 'temp', 'queue', '.watcher.lock')
@@ -90,12 +60,10 @@ class WatcherLock(object):
 
 
 def task_work_dir(root, task_id):
-    """Рабочий каталог задачи на машине агента: temp\\queue\\<id>\\."""
     return os.path.join(root, 'temp', 'queue', task_id)
 
 
 def drop_work_dir(path):
-    """Убрать рабочий каталог задачи: после записи результата он не нужен."""
     shutil.rmtree(path, ignore_errors=True)
 
 
@@ -105,10 +73,6 @@ def report(quiet, text):
 
 
 def handle_task(client, cfg, task, mode, root, allow_gui=True, quiet=False):
-    """Провести одну задачу: доставка, ожидание результата, уборка.
-
-    Возвращает словарь итога для строки журнала watcher-а.
-    """
     task_id = task['id']
     agent_id = agent_name(cfg)
     work = task_work_dir(root, task_id)
@@ -150,12 +114,6 @@ def handle_task(client, cfg, task, mode, root, allow_gui=True, quiet=False):
 
 
 def wait_for_result(client, cfg, task, work, fields, quiet=False):
-    """Ждать, пока агент запишет результат командой --write-result.
-
-    Пока ждём, раз в PROGRESS_EVERY_S отправляем стадию running: это и видимая стадия
-    в браузере, и продление claim. Ждать дольше timeout_s задачи бессмысленно - сервер
-    закроет её сам.
-    """
     task_id = task['id']
     agent_id = agent_name(cfg)
     answer_path = os.path.join(work, 'answer.md')
@@ -180,16 +138,12 @@ def wait_for_result(client, cfg, task, work, fields, quiet=False):
             last_touch = time.time()
         time.sleep(5.0)
 
-    # Результат не записан: задача закрыта сервером по deadline либо закроется следующим
-    # проходом reclaim. Рабочий каталог оставляем - в нём формулировка и файл ответа,
-    # по которым видно, на чём остановились.
     report(quiet, 'задача %s: результат не записан за %d с, файл ответа %s'
            % (task_id, limit, answer_path))
     return {'task_id': task_id, 'state': 'waiting', 'message': 'результат не записан'}
 
 
 def run_once(client, cfg, mode, root, allow_gui=True, quiet=False):
-    """Один проход: забрать задачу с сервера и провести её. True - задача была."""
     agent_id = agent_name(cfg)
     claimed = client.claim(agent_id, (cfg.get('agent') or {}).get('claim_ttl_s'))
     task = claimed.get('task')
@@ -272,7 +226,7 @@ def main(argv=None):
                 worked = False
             except KeyboardInterrupt:
                 raise
-            except Exception as exc:  # noqa: BLE001 - проход не должен убивать watcher
+            except Exception as exc:
                 print('%s проход не выполнен: %s' % (time.strftime('%H:%M:%S'), exc))
                 sys.stderr.write('%s\n' % traceback.format_exc())
                 worked = False
@@ -298,4 +252,3 @@ def main(argv=None):
 
 if __name__ == '__main__':
     sys.exit(main())
-

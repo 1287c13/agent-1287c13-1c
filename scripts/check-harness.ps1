@@ -333,7 +333,7 @@ $layerFiles = @('integration\agent.py', 'integration\watcher.py', 'integration\b
     'integration\transport\schema.py', 'integration\transport\cline.py',
     'integration\transport\client.py', 'integration\transport\wsgi.py',
     'integration\transport\http_server.py',
-    'integration\schemas\task_schema.json', 'integration\schemas\result_schema.json',
+    'integration\schemas\task_schema.json',
     'integration\web\index.html', 'integration\web\app.js', 'integration\web\style.css',
     'deploy\install-local.ps1', 'deploy\config.example.json',
     'scripts\start-watcher.ps1', 'scripts\stop-watcher.ps1')

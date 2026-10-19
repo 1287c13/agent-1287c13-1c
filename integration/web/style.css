@@ -31,12 +31,6 @@ body {
   font-size: 24px;
 }
 
-.sub {
-  margin: 0;
-  color: var(--muted);
-  max-width: 860px;
-}
-
 .card {
   background: var(--card);
   border: 1px solid var(--line);
@@ -107,12 +101,6 @@ button.ghost {
 .state { font-size: 13px; color: var(--muted); }
 .state.ok { color: var(--ok); }
 .state.bad { color: var(--bad); }
-
-.warn {
-  margin: 10px 0 0;
-  font-size: 12px;
-  color: var(--warn);
-}
 
 .keys {
   display: flex;

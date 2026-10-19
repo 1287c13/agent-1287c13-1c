@@ -1,16 +1,3 @@
-# -*- coding: utf-8 -*-
-"""Ответ агента в HTML: markdown-файл ответа превращается в страницу.
-
-Правило разделения: агент всегда пишет ответ файлом markdown
-(`temp\\queue\\<id>\\answer.md`) - формат, который читается человеком и правится
-руками. HTML получается по требованию: кнопка «Скачать ответ (HTML)» в окне задач,
-маршрут `GET /api/answer/<id>?format=html` на сервере очереди и ключи
-`--answer --html` у `integration\\agent.py`. Конвертер свой: внешних markdown-библиотек
-в окружении нет, а набор конструкций ответа фиксирован - заголовки, списки, таблицы,
-блоки кода, цитаты, выделения и ссылки. Неразобранный текст остаётся абзацем, то есть
-конвертер ничего не теряет.
-"""
-
 import html
 import re
 
@@ -63,7 +50,6 @@ TABLE_SEP = re.compile(r'^\s*\|(\s*:?-{2,}:?\s*\|)+\s*$')
 
 
 def inline(text):
-    """Строчная разметка: код, выделения, ссылки. Текст до неё экранируется."""
     out = html.escape(text, quote=False)
     out = re.sub(r'`([^`]+)`', r'<code>\1</code>', out)
     out = re.sub(r'\*\*([^*]+)\*\*', r'<strong>\1</strong>', out)
@@ -72,12 +58,10 @@ def inline(text):
 
 
 def table_cells(line):
-    """Ячейки строки таблицы: крайние пустые части отброшены."""
     return [cell.strip() for cell in line.strip().strip('|').split('|')]
 
 
 def render_table(lines, start):
-    """Таблица: строки до первой нет-таблицы. Возвращает (html, индекс_после)."""
     head = table_cells(lines[start])
     index = start + 2
     body = []
@@ -97,7 +81,6 @@ def render_table(lines, start):
 
 
 def render_list(lines, start, ordered):
-    """Список: элементы до первой строки другого вида."""
     pattern = NUMBER if ordered else BULLET
     items = []
     index = start
@@ -113,7 +96,6 @@ def render_list(lines, start, ordered):
 
 
 def render_body(markdown):
-    """Тело страницы: разбор markdown построчно. Непонятая строка становится абзацем."""
     lines = (markdown or '').replace('\r\n', '\n').replace('\r', '\n').split('\n')
     out = []
     paragraph = []
@@ -178,7 +160,6 @@ def render_body(markdown):
 
 
 def render(markdown, title='Ответ задачи', source=''):
-    """Ответ markdown - страница HTML целиком."""
     body = render_body(markdown)
     if source:
         body = '<p class="source">%s</p>\n%s' % (html.escape(source), body)
@@ -186,5 +167,4 @@ def render(markdown, title='Ответ задачи', source=''):
 
 
 def answer_file_name(task_id, kind='html'):
-    """Имя файла ответа для скачивания: по нему видно задачу."""
     return 'answer_%s.%s' % (task_id or 'task', kind)

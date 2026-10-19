@@ -1,37 +1,3 @@
-# -*- coding: utf-8 -*-
-"""Очередь задач интеграции на сервере: каталоги, переходы состояний, журнал событий.
-
-Раскладка (пути относительно server.root):
-
-    inbox\\task_<id>.json        задача ждёт агента
-    processing\\task_<id>.json   агент взял задачу и ведёт её
-    archive\\task_<id>.json      задача завершена, файл оставлен для разбора
-    outbox\\result_<id>.json     итог задачи - его читает браузер и внешний клиент
-    failed\\*.json               отклонённые задачи и нечитаемые файлы
-    agents\\<имя>.json           отметка живого агента (кто, когда, какую задачу ведёт)
-    events.jsonl                журнал событий очереди (append-only)
-
-Очередь живёт только на сервере. Машина агента держит лишь рабочий каталог
-temp\\queue\\<id>\\ на время задачи: формулировку и файл ответа. Так у задачи один
-источник правды - сервер, а не два каталога, которые нужно сверять.
-
-Переходы состояний:
-
-    queued -> claimed -> delivered -> running -> done | error
-                                             -> failed (сбой доставки, попытки кончились)
-                    \\-> queued (claim истёк: задача вернулась в очередь)
-
-Состояние хранится в файле задачи (поле state) и дублируется в файле результата
-(outbox) на момент завершения. Читатель статуса смотрит файл задачи, поэтому видит
-и текущую стадию, и историю progress - без отдельного журнала стадий.
-
-Атомарность. JSON пишется во временный файл `<имя>.tmp` рядом и переименовывается
-os.replace: переименование в пределах тома атомарно. Забрать задачу из inbox может
-только один процесс: os.replace(src, dst) удаётся ровно одному, второй получает
-исключение и берёт следующую. Это же свойство держит очередь при нескольких
-процессах WSGI на Passenger.
-"""
-
 import contextlib
 import errno
 import json
@@ -66,29 +32,25 @@ HINTS = {
 
 
 class QueueError(Exception):
-    """Ошибка очереди: нарушена раскладка каталогов или испорчен файл."""
+    pass
 
 
 def now_iso(moment=None):
-    """Местное время в формате схемы: ГГГГ-ММ-ДДTЧЧ:ММ:СС."""
     return datetime.fromtimestamp(moment or time.time()).strftime('%Y-%m-%dT%H:%M:%S')
 
 
 def new_task_id(moment=None):
-    """Идентификатор задачи: t-<ГГГГММДД>-<ЧЧММСС>-<6 hex>."""
     tail = ''.join(random.choice('0123456789abcdef') for _ in range(6))
     return 't-%s-%s' % (datetime.fromtimestamp(moment or time.time()).strftime('%Y%m%d-%H%M%S'), tail)
 
 
 def host_name():
-    """Кто отправил задачу: <COMPUTERNAME>\\<USERNAME>."""
     user = os.environ.get('USERNAME') or os.environ.get('USER') or 'unknown'
     computer = os.environ.get('COMPUTERNAME') or os.environ.get('HOSTNAME') or ''
     return '%s\\%s' % (computer, user) if computer else user
 
 
 def setup_stdio():
-    """Печать в UTF-8 независимо от кодовой страницы консоли."""
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.reconfigure(encoding='utf-8')
@@ -98,7 +60,6 @@ def setup_stdio():
 
 
 def write_json_atomic(path, payload):
-    """Записать JSON атомарно: временный файл рядом плюс os.replace."""
     folder = os.path.dirname(path)
     if folder and not os.path.isdir(folder):
         os.makedirs(folder)
@@ -129,7 +90,6 @@ def write_text_atomic(path, text):
 
 @contextlib.contextmanager
 def file_lock(path, timeout=LOCK_TIMEOUT_S, stale=LOCK_STALE_S):
-    """Замок на файле: O_EXCL плюс снятие зависшего замка по возрасту."""
     deadline = time.time() + timeout
     fd = None
     while True:
@@ -160,7 +120,6 @@ def file_lock(path, timeout=LOCK_TIMEOUT_S, stale=LOCK_STALE_S):
 
 
 def append_line(path, payload):
-    """Дописать строку в журнал: один вызов - одна строка, с блокировкой и fsync."""
     folder = os.path.dirname(path)
     if folder and not os.path.isdir(folder):
         os.makedirs(folder)
@@ -173,20 +132,17 @@ def append_line(path, payload):
 
 
 def safe_name(name):
-    """Имя файла из произвольной строки: имя агента приходит от клиента."""
     clean = re.sub(r'[^A-Za-z0-9_.@-]+', '_', (name or 'agent').strip())
     return clean.strip('._')[:80] or 'agent'
 
 
 def preview(text, limit=240):
-    """Короткая строка для списка: одна строка, без переводов строк."""
     value = re.sub(r'\s+', ' ', (text or '')).strip()
     return value if len(value) <= limit else value[:limit - 1] + '…'
 
 
 
 class QueueStore(object):
-    """Каталог очереди на сервере: единственный источник правды о задаче."""
 
     def __init__(self, base):
         self.base = os.path.abspath(base)
@@ -194,10 +150,8 @@ class QueueStore(object):
                      ('inbox', 'processing', 'archive', 'outbox', 'failed', 'agents')}
         self.events = os.path.join(self.base, 'events.jsonl')
 
-    # --- раскладка -----------------------------------------------------------
 
     def ensure(self):
-        """Создать каталоги очереди. Идемпотентно."""
         if not os.path.isdir(self.base):
             os.makedirs(self.base)
         for path in self.dirs.values():
@@ -211,14 +165,12 @@ class QueueStore(object):
         return os.path.join(self.dirs['outbox'], 'result_%s.json' % task_id)
 
     def rel(self, path):
-        """Путь относительно каталога очереди - для журналов и сообщений."""
         try:
             return os.path.relpath(path, self.base)
         except ValueError:
             return path
 
     def event(self, kind, **fields):
-        """Строка журнала событий. Сбой записи события задачу не отменяет."""
         try:
             self.ensure()
             record = {'event': kind, 'at': now_iso(), 'ts': round(time.time(), 3)}
@@ -227,10 +179,8 @@ class QueueStore(object):
         except (OSError, QueueError, ValueError):
             pass
 
-    # --- поиск и разбор файлов задач ----------------------------------------
 
     def _locate(self, task_id):
-        """Каталог и путь файла задачи. (None, None) - задачи нет."""
         if not task_id:
             return None, None
         for folder in ('processing', 'inbox', 'archive'):
@@ -240,7 +190,6 @@ class QueueStore(object):
         return None, None
 
     def task(self, task_id):
-        """Задача в текущем состоянии или None."""
         _folder, path = self._locate(task_id)
         if not path:
             return None
@@ -250,7 +199,6 @@ class QueueStore(object):
             return None
 
     def result(self, task_id):
-        """Записанный итог задачи или None."""
         path = self.result_path(task_id)
         if not os.path.isfile(path):
             return None
@@ -260,7 +208,6 @@ class QueueStore(object):
             return None
 
     def _remember(self, task, stage, message=''):
-        """Дописать стадию в историю задачи и обновить отметку времени."""
         items = list(task.get('progress') or [])
         items.append({'stage': stage, 'at': now_iso(), 'message': preview(message, 400)})
         task['progress'] = items[-MAX_PROGRESS:]
@@ -270,14 +217,11 @@ class QueueStore(object):
         task['updated_ts'] = round(time.time(), 3)
 
     def _touch_claim(self, task, ttl_s=None):
-        """Продлить claim: задача в работе, агент жив."""
         ttl = int(ttl_s or task.get('claim_ttl_s') or DEFAULT_CLAIM_TTL_S)
         task['claim_ttl_s'] = ttl
 
-    # --- постановка задачи ---------------------------------------------------
 
     def enqueue(self, task):
-        """Положить задачу в inbox. Задачу приносит сервер после проверки формы."""
         self.ensure()
         task = dict(task)
         task.setdefault('id', new_task_id())
@@ -291,7 +235,6 @@ class QueueStore(object):
         return task
 
     def reject(self, payload, errors, task_id=None):
-        """Отложить непринятую задачу в failed: отправитель должен увидеть причину."""
         self.ensure()
         task_id = task_id or new_task_id()
         path = os.path.join(self.dirs['failed'], 'rejected_%s.json' % task_id)
@@ -301,15 +244,8 @@ class QueueStore(object):
                    client=(payload or {}).get('client') if isinstance(payload, dict) else None)
         return path
 
-    # --- работа агента -------------------------------------------------------
 
     def claim(self, agent, ttl_s=DEFAULT_CLAIM_TTL_S):
-        """Взять самую старую задачу из inbox. None - очередь пуста.
-
-        Задача забирается переименованием файла: из двух процессов, читающих inbox,
-        переименование удаётся ровно одному. Испорченный файл уезжает в failed и не
-        блокирует очередь.
-        """
         self.ensure()
         self.reclaim_stale()
         self.sweep_timeouts()
@@ -323,9 +259,6 @@ class QueueStore(object):
             except (ValueError, OSError):
                 created = 0.0
             names.append((created, name))
-        # Порядок очереди - по времени постановки, а не по имени файла: хвост
-        # идентификатора случаен, и строковая сортировка переставляла бы задачи,
-        # поставленные в одну секунду.
         names.sort()
         now = time.time()
         for _created, name in names:
@@ -365,7 +298,6 @@ class QueueStore(object):
 
 
     def progress(self, task_id, agent, stage, message=''):
-        """Отметить стадию задачи. Возвращает (принято, пояснение, задача)."""
         self.ensure()
         if stage not in STAGE_ORDER:
             return False, 'недопустимая стадия: %s' % stage, None
@@ -398,7 +330,6 @@ class QueueStore(object):
 
     def complete(self, task_id, agent=None, status='done', answer='', fields=None,
                  message=''):
-        """Записать итог в outbox и перенести задачу в archive. None - уже завершена."""
         self.ensure()
         status = status if status in RESULT_STATUSES else 'error'
         folder, path = self._locate(task_id)
@@ -457,15 +388,8 @@ class QueueStore(object):
         return result
 
 
-    # --- возврат и таймауты --------------------------------------------------
 
     def reclaim_stale(self):
-        """Вернуть в очередь задачи, чей claim истёк. Список действий по задачам.
-
-        Агент мог умереть между claim и записью результата: задача не должна висеть
-        в processing вечно. После MAX_ATTEMPTS попыток она завершается как failed -
-        иначе одна и та же задача ходила бы по кругу.
-        """
         self.ensure()
         now = time.time()
         actions = []
@@ -504,7 +428,6 @@ class QueueStore(object):
         return actions
 
     def sweep_timeouts(self):
-        """Завершить задачи, у которых прошёл deadline (timeout_s). Список task_id."""
         self.ensure()
         now = time.time()
         done = []
@@ -530,10 +453,8 @@ class QueueStore(object):
         return done
 
 
-    # --- чтение состояния ----------------------------------------------------
 
     def status(self, task_id):
-        """Состояние задачи для браузера: стадия, подсказка, время, история."""
         folder, path = self._locate(task_id)
         result = self.result(task_id)
         if not path and not result:
@@ -575,7 +496,6 @@ class QueueStore(object):
         }
 
     def statuses(self, task_ids):
-        """Состояния пачки задач: по одному чтению файла на идентификатор."""
         items = []
         for task_id in task_ids or []:
             item = self.status(task_id)
@@ -584,7 +504,6 @@ class QueueStore(object):
         return items
 
     def _summary(self, task_id, payload):
-        """Короткая строка для списка истории."""
         state = payload.get('state') or payload.get('status') or ''
         created_ts = float(payload.get('created_ts') or 0)
         moment = float(payload.get('finished_ts') or payload.get('updated_ts') or 0)
@@ -606,7 +525,6 @@ class QueueStore(object):
 
 
     def recent(self, limit=20):
-        """Последние задачи: завершённые и те, что ещё в работе. Свежие сверху."""
         self.ensure()
         items = []
         seen = set()
@@ -636,7 +554,6 @@ class QueueStore(object):
         return [self._summary(task_id, payload) for _ts, task_id, payload in items[:max(1, limit)]]
 
     def counts(self):
-        """Счётчики очереди для /api/health и строки состояния в браузере."""
         self.ensure()
         outbox = [n for n in os.listdir(self.dirs['outbox'])
                   if n.startswith('result_') and n.endswith('.json')]
@@ -662,10 +579,8 @@ class QueueStore(object):
             'agents_alive': len([a for a in self.agents() if a.get('alive')]),
         }
 
-    # --- агенты --------------------------------------------------------------
 
     def touch_agent(self, name, info=None):
-        """Отметить живое присутствие агента: файл agents\\<имя>.json."""
         if not name:
             return
         self.ensure()
@@ -679,7 +594,6 @@ class QueueStore(object):
             pass
 
     def agents(self, alive_s=60.0):
-        """Отметки агентов: кто, когда, какую задачу ведёт. Живой - отметка свежая."""
         self.ensure()
         now = time.time()
         items = []
@@ -697,10 +611,8 @@ class QueueStore(object):
         items.sort(key=lambda row: row.get('name') or '')
         return items
 
-    # --- журнал событий ------------------------------------------------------
 
     def events_tail(self, limit=50):
-        """Последние строки events.jsonl. Битые строки пропускаются."""
         if not os.path.isfile(self.events):
             return []
         rows = []

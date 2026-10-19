@@ -1,22 +1,3 @@
-# -*- coding: utf-8 -*-
-"""Настройки интеграции: один файл deploy\\config.json на все роли.
-
-Файл читают и сервер (очередь, ключи клиентов, список баз для формы), и агент
-(адрес сервера, свой ключ, режим доставки). Разделение по секциям:
-
-    server  host, port, public_url, root (каталог очереди), cors_origin, max_body,
-            databases (перечисление для проверки формы), clients[] (ключи доступа);
-    agent   name, server_url, key, deliver, interval, idle_interval, claim_ttl_s.
-
-Почему базы в настройках сервера, а не в .v8-project.json: сервер стоит на хостинге,
-где выгрузки и файла проекта нет. Список баз здесь - подсказка форме и грубая проверка
-опечатки отправителя; настоящее разрешение слота <база> (id -> путь, платформа) делает
-агент на своей машине по .v8-project.json.
-
-Ключи клиентов сравниваются hmac.compare_digest: обычное == выходит из цикла на первом
-несовпавшем байте и по времени ответа выдаёт префикс ключа.
-"""
-
 import hmac
 import json
 import os
@@ -24,11 +5,9 @@ import os
 SERVER_DEFAULTS = {
     'host': '127.0.0.1',
     'port': 8760,
-    'public_url': '',
     'root': '',
     'cors_origin': '*',
     'max_body': 262144,
-    'databases': [],
     'clients': [],
 }
 
@@ -45,7 +24,6 @@ AGENT_DEFAULTS = {
 
 
 def project_root(path=None):
-    """Корень харнесса: каталог выше integration\\."""
     base = path or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if os.path.basename(base) == 'integration':
         return os.path.dirname(base)
@@ -53,7 +31,6 @@ def project_root(path=None):
 
 
 def config_path(root=None, explicit=None):
-    """Путь к файлу настроек: аргумент, затем INTEGRATION_CONFIG, затем deploy\\config.json."""
     if explicit:
         return os.path.abspath(explicit)
     env = os.environ.get('INTEGRATION_CONFIG')
@@ -77,7 +54,6 @@ def _as_int(value, default):
 
 
 def _normalize_clients(raw, notes):
-    """Ключи клиентов: имя, ключ, разрешение задач по харнессу."""
     clients = []
     seen = set()
     for index, item in enumerate(raw or []):
@@ -100,11 +76,6 @@ def _normalize_clients(raw, notes):
 
 
 def load_config(root=None, path=None):
-    """Прочитать настройки. Возвращает (словарь, список замечаний).
-
-    Отсутствие файла - не исключение: сервер поднимется и скажет, что клиентских
-    ключей нет, а не упадёт на старте Passenger с невнятной ошибкой 500.
-    """
     root = project_root(root)
     target = config_path(root, path)
     notes = []
@@ -126,10 +97,8 @@ def load_config(root=None, path=None):
     server = dict(SERVER_DEFAULTS)
     server['host'] = str(raw_server.get('host') or SERVER_DEFAULTS['host'])
     server['port'] = _as_int(raw_server.get('port'), SERVER_DEFAULTS['port'])
-    server['public_url'] = str(raw_server.get('public_url') or '').rstrip('/')
     server['cors_origin'] = str(raw_server.get('cors_origin') or '*')
     server['max_body'] = max(4096, _as_int(raw_server.get('max_body'), SERVER_DEFAULTS['max_body']))
-    server['databases'] = [str(x) for x in (raw_server.get('databases') or []) if str(x).strip()]
     server['clients'] = _normalize_clients(raw_server.get('clients'), notes)
 
     queue_root = str(raw_server.get('root') or '').strip()
@@ -165,7 +134,6 @@ def load_config(root=None, path=None):
 
 
 def client_by_key(cfg, key):
-    """Клиент по ключу доступа. None - ключ не подходит."""
     if not key:
         return None
     given = str(key)
@@ -177,7 +145,6 @@ def client_by_key(cfg, key):
 
 
 def agent_name(cfg):
-    """Имя агента: из настроек, иначе <COMPUTERNAME>\\<USERNAME>."""
     name = (cfg.get('agent') or {}).get('name') or ''
     if name:
         return name
@@ -187,10 +154,4 @@ def agent_name(cfg):
 
 
 def public_server_view(cfg):
-    """Что сервер рассказывает о себе после входа: без ключей и путей."""
-    server = cfg.get('server') or {}
-    return {
-        'databases': list(server.get('databases') or []),
-        'public_url': server.get('public_url') or '',
-        'version': 'integration-v2',
-    }
+    return {'version': 'integration-v2'}

@@ -31,7 +31,7 @@
 | `integration\transport\cline.py` | подтверждение доставки по журналу сессий Cline (`sessions.db`), а не по ответу оболочки Windows |
 | `integration\transport\wsgi.py` | WSGI-приложение для хостинга (Passenger и подобные) и `SCRIPT_NAME` |
 | `integration\transport\http_server.py` | локальный сервер на `wsgiref` для проверки без хостинга (на хостинге не участвует) |
-| `integration\transport\__init__.py` | пакет транспорта: общее описание модулей, без кода |
+| `integration\transport\__init__.py` | пакет транспорта |
 | `integration\passenger_wsgi.py` | точка входа Passenger: база URI и читаемая ошибка импорта |
 | `integration\watcher.py` | watcher: claim с сервера, доставка в Cline, ожидание результата |
 | `integration\bridge.py` | мост к Cline: URI-протокол VS Code, ручной режим, echo |
@@ -39,8 +39,7 @@
 | `integration\md_to_html.py` | ответ markdown в HTML: `GET /api/answer/<id>?format=html` и скачивание страницы |
 | `integration\web\index.html`, `app.js`, `style.css` | страница задач: вход по ключу, форма, стадии, история |
 | `integration\schemas\task_schema.json` | схема задачи - контракт отправителя |
-| `integration\schemas\result_schema.json` | схема результата - контракт читателя |
-| `integration\transport\schema.py` | мини-валидатор JSON Schema для этих двух схем |
+| `integration\transport\schema.py` | мини-валидатор JSON Schema |
 | `deploy\install-local.ps1` | локальная установка: python, файлы слоя, `config.json`, ярлык watcher-а |
 | `deploy\run-server.bat`, `run-watcher.bat`, `run-agent.bat` | обёртки запуска (watcher удобнее поднимать скриптом `scripts\start-watcher.ps1`: он работает фоном) |
 | `deploy\config.example.json` | образец настроек; копия `deploy\config.json` в git не хранится |
@@ -79,14 +78,10 @@
 
 ```json
 {
+  "python": "py -3",
   "server": {
     "host": "127.0.0.1",
     "port": 8760,
-    "public_url": "https://example.org/agent",
-    "root": "queue",
-    "cors_origin": "*",
-    "max_body": 262144,
-    "databases": ["ka2", "demo-ssl"],
     "clients": [
       { "name": "browser", "key": "ключ-браузера", "allow_harness": false },
       { "name": "agent-01", "key": "ключ-агента", "allow_harness": true }
@@ -96,24 +91,22 @@
     "name": "agent-01",
     "server_url": "https://example.org/agent",
     "key": "ключ-агента",
-    "deliver": "uri",
-    "interval": 2.0,
-    "idle_interval": 15.0,
-    "claim_ttl_s": 300
+    "deliver": "uri"
   }
 }
 ```
 
-- `server.root` - каталог очереди; относительный путь считается от корня харнесса;
-- `server.databases` - перечисление баз для формы. Сервер сверяет с ним слот `<база>`
-  (опечатка отправителя видна сразу), но **путь к базе знает только агент**: он
-  разрешает слот по `.v8-project.json` на своей машине;
 - `server.clients` - ключи доступа. Пустой список - сервер отвечает 503 на все
   защищённые маршруты: публиковать его «без ключей» нельзя;
 - `allow_harness` - разрешение клиенту ставить задачи `mode=harness` (по инструменту
   агента). Браузеру по умолчанию запрещено: он ставит задачи по базе;
 - `agent.deliver` - режим доставки по умолчанию (`uri`, `manual`, `echo`);
-- `agent.claim_ttl_s` - сколько секунд задача закреплена за агентом без продления;
+- необязательные ключи сервера: `root` (каталог очереди, по умолчанию `queue\` в корне
+  харнесса), `cors_origin` (`*`), `max_body` (262144); агента - `interval`, `idle_interval`,
+  `claim_ttl_s`;
+
+Слой держится минимальным: в коде нет комментариев и докстрингов, на странице - пояснений,
+в конфиге - только рабочие ключи.
 
 ## 5. Ключи и доступ
 
@@ -125,17 +118,13 @@
 | Маршрут | Ключ | Что делает |
 |---------|------|-----------|
 | `GET /api/health` | не нужен | состояние сервера и счётчики очереди (без путей и ключей) |
-| `POST /api/auth` | не нужен | проверка ключа: имя клиента, `allow_harness`, список баз |
+| `POST /api/auth` | не нужен | проверка ключа: имя клиента, `allow_harness` |
 | `GET /` | не нужен | страница задач (`integration\web`) |
 | остальные `GET`/`POST /api/*` | нужен | очередь, ответы, агенты |
 
 Страница хранит ключ в `localStorage`: история ключей - `integration.keys`, активный -
-`integration.activeKey`. Адрес сервера страница не спрашивает и не хранит: она получена
-с него же, поэтому запросы идут по каталогу её собственного адреса (это работает и когда
-сайт опубликован не в корне домена, например по `/agent`). Ключ лежит открытым
-текстом, поэтому на странице есть предупреждение, удаление отдельного ключа и кнопка
-«Забыть все ключи» с подтверждением. Это осознанный выбор: сервер не ставит cookie и
-не заводит сеансов, которые нужно чистить на его стороне.
+`integration.activeKey`. Адрес сервера страница не спрашивает: запросы идут по каталогу
+её собственного адреса (работает и когда сайт опубликован по `/agent`).
 
 ## 6. Стадии задачи
 
@@ -182,7 +171,6 @@ claim, но историю не переписывает. `claim` истекае
 | `GET /api/history?limit=20` | последние задачи и счётчики |
 | `GET /api/answer/<id>?format=md` | ответ задачи: markdown (`md`) или страница (`html`) |
 | `GET /api/agents` | отметки агентов: кто жив, какую задачу ведёт |
-| `GET /api/config` | список баз и публичный адрес (после входа) |
 | `GET /api/events?limit=50` | последние события очереди |
 | `POST /api/agent/claim` | агент берёт задачу: `{"agent": "...", "ttl_s": 300}` |
 | `POST /api/agent/progress` | стадия: `{"id": "...", "stage": "delivered", "message": "..."}` |
@@ -203,8 +191,8 @@ curl -H "X-Integration-Token: ключ-браузера" -H "Content-Type: appli
 ## 8. Путь задачи
 
 1. **Отправитель** (страница задач или HTTP-клиент) вызывает `POST /api/task`.
-2. **Сервер** проверяет форму (`integration\task.py`): слоты, режим, база из
-   `server.databases`, право клиента на `mode=harness`. Отклонённая задача уходит в
+2. **Сервер** проверяет форму (`integration\task.py`): слоты, режим, право клиента на
+   `mode=harness`. Отклонённая задача уходит в
    `failed\rejected_<id>.json` с причиной. Принятая сразу кладётся в `inbox` - второго
    разборщика (журнала и его позиции) больше нет: очередь принадлежит серверу.
 3. **Watcher** (`integration\watcher.py`) вызывает `POST /api/agent/claim`. Сервер
@@ -293,7 +281,7 @@ location /agent/ {
   параллельные процессы не выдадут одну задачу дважды. `agents\` покажет, сколько
   агентов работает;
 - **HTTPS.** Слой не терминирует TLS: сертификат и редирект с HTTP - задача nginx.
-  Адрес в `server.public_url` и `agent.server_url` должен быть уже `https://`;
+  Адрес в `agent.server_url` должен быть уже `https://`;
 - **локальная проверка.** `deploy\run-server.bat` поднимает тот же WSGI-код на
   `wsgiref` - адрес и порт из `server.host`/`server.port`.
 

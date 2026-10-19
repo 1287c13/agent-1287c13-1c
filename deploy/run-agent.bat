@@ -1,5 +1,4 @@
 @echo off
-rem Проверка связи агента с сервером: состояние очереди и живые агенты.
 chcp 65001 >nul
 setlocal
 for %%i in ("%~dp0..") do set "ROOT=%%~fi"

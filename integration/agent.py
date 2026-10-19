@@ -1,29 +1,3 @@
-# -*- coding: utf-8 -*-
-"""Командная строка агента: поставить задачу, записать результат, прочитать состояние.
-
-Роли файла:
-
-    --submit        поставить задачу на сервер (слоты контракта -> POST /api/task);
-    --write-result  записать итог задачи из файла ответа (это делает Cline, выполнив
-                    задачу: файл ответа и команда записи описаны в
-                    docs\\07-external-integration.md);
-    --prepare       создать файл ответа со скелетом полей для задачи;
-    --status        состояние задачи: стадия, подсказка, время;
-    --answer        ответ задачи: markdown или страница HTML;
-    --list          последние задачи очереди;
-    --health        состояние сервера: счётчики и агенты.
-
-Почему результат пишет отдельный вызов: Cline работает в другом процессе, и очередь
-для него - внешний объект на сервере. Обратный путь устроен так же, как прямой: файл
-ответа плюс одна команда, которая отправляет его на сервер. Итог проходит через
-POST /api/agent/result, поэтому отправитель получает ответ одной формы, а не текст,
-зависящий от режима доставки.
-
-Локально файл ответа живёт в рабочем каталоге задачи temp\\queue\\<id>\\answer.md;
-после записи результата watcher этот каталог удаляет. Каталога очереди на машине
-агента нет: очередь одна и она на сервере.
-"""
-
 import argparse
 import json
 import os
@@ -33,9 +7,9 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
-from transport.client import ClientError, IntegrationClient  # noqa: E402
-from transport.config import agent_name, load_config, project_root  # noqa: E402
-from transport.store import setup_stdio, write_text_atomic  # noqa: E402
+from transport.client import ClientError, IntegrationClient
+from transport.config import agent_name, load_config, project_root
+from transport.store import setup_stdio, write_text_atomic
 
 ANSWER_LABELS = (
     ('Слой', 'layer'),
@@ -50,12 +24,12 @@ ANSWER_SKELETON = """# Ответ на задачу %(id)s
 
 %(prompt)s
 
-Слой: 
-MCP: 
-Скиллы: 
-Проверка: 
-Сделано: 
-Не проверено: 
+Слой:
+MCP:
+Скиллы:
+Проверка:
+Сделано:
+Не проверено:
 
 ---
 Здесь текст ответа: что сделано, какие средства проверки вызваны и какой вывод получен.
@@ -64,12 +38,10 @@ MCP:
 
 
 def answer_skeleton(task):
-    """Скелет файла ответа: те же четыре строки преамбулы и три строки отчёта."""
     return ANSWER_SKELETON % {'id': task.get('id') or '', 'prompt': task.get('prompt') or ''}
 
 
 def prepare_answer_file(work_dir, task):
-    """Создать файл ответа в рабочем каталоге задачи. Существующий не перезаписывается."""
     if not os.path.isdir(work_dir):
         os.makedirs(work_dir)
     path = os.path.join(work_dir, 'answer.md')
@@ -79,12 +51,6 @@ def prepare_answer_file(work_dir, task):
 
 
 def parse_answer_text(text):
-    """Разобрать файл ответа: поля отчёта плюс текст целиком.
-
-    Строка вида «Проверка: ...» попадает в поле; всё остальное считается текстом
-    ответа. Первое непустое вхождение метки побеждает: скелет уже содержит пустые
-    метки, поэтому заполненная строка может стоять ниже.
-    """
     fields = {}
     for line in (text or '').splitlines():
         for label, key in ANSWER_LABELS:
@@ -99,7 +65,6 @@ def parse_answer_text(text):
 
 
 def cline_work_dir(root):
-    """Каталог копий базы Cline: подтверждение доставки читает копию, не оригинал."""
     path = os.path.join(root, 'temp', 'cline-db')
     if not os.path.isdir(path):
         os.makedirs(path)
@@ -107,11 +72,10 @@ def cline_work_dir(root):
 
 
 def work_dir_for(root, task_id):
-    """Рабочий каталог задачи на машине агента."""
+    pass
 
 
 def make_client(cfg, args):
-    """Клиент по настройкам и ключам командной строки."""
     url = args.server or cfg['agent']['server_url']
     key = args.key if args.key is not None else cfg['agent']['key']
     if not url:
@@ -124,7 +88,6 @@ def make_client(cfg, args):
 
 
 def print_status(item):
-    """Строка состояния задачи для человека."""
     if not item:
         print('задачи нет')
         return
@@ -143,7 +106,6 @@ def print_status(item):
 
 
 def cmd_submit(client, args):
-    """Поставить задачу на сервер."""
     if not args.action:
         raise SystemExit('--submit требует --action <что нужно сделать>; '
                          'слот <цель> (--goal) необязателен')
@@ -166,7 +128,6 @@ def cmd_submit(client, args):
 
 
 def cmd_write_result(client, cfg, args, root):
-    """Записать итог задачи из файла ответа."""
     path = args.file or os.path.join(work_dir_for(root, args.task), 'answer.md')
     if not os.path.isfile(path):
         raise SystemExit('файл ответа не найден: %s' % path)
@@ -187,7 +148,6 @@ def cmd_write_result(client, cfg, args, root):
 
 
 def cmd_prepare(client, args, root):
-    """Создать файл ответа со скелетом для задачи."""
     item = client.status(args.task)
     path = prepare_answer_file(work_dir_for(root, args.task), item)
     print('файл ответа: %s' % path)
@@ -195,13 +155,11 @@ def cmd_prepare(client, args, root):
 
 
 def cmd_status(client, args):
-    """Показать состояние задачи."""
     print_status(client.status(args.task))
     return 0
 
 
 def cmd_answer(client, args, root):
-    """Ответ задачи: markdown печатается, HTML сохраняется файлом."""
     kind = 'html' if args.html else 'md'
     response = client.answer(args.task, kind)
     content = response.get('content') or ''
@@ -222,7 +180,6 @@ def cmd_answer(client, args, root):
 
 
 def cmd_list(client, args):
-    """Последние задачи очереди."""
     data = client.history(args.limit)
     counts = data.get('counts') or {}
     print('очередь: ждут %s, в работе %s, готово %s, сбоев %s, агентов живо %s'
@@ -236,7 +193,6 @@ def cmd_list(client, args):
 
 
 def cmd_health(client):
-    """Состояние сервера."""
     data = client.health()
     queue = data.get('queue') or {}
     print('сервер: %s, версия %s' % (data.get('status'), data.get('version')))
@@ -343,5 +299,3 @@ def main(argv=None):
 
 if __name__ == '__main__':
     sys.exit(main())
-
-

@@ -291,8 +291,8 @@ Get-ChildItem 'scripts\*.ps1' | ForEach-Object {
 **Причина:** watcher смотрит на другой адрес или входит другим ключом. Очередь теперь одна -
 на сервере, поэтому «другая папка» превратилась в «другой адрес».
 
-**Лечение:** сверить `agent.server_url` и `agent.key` в `deploy\config.json` с
-`server.public_url` и `server.clients`; проверить `py -3 integration\agent.py --health` - он
+**Лечение:** сверить `agent.server_url` и `agent.key` в `deploy\config.json` с адресом
+сервера и `server.clients`; проверить `py -3 integration\agent.py --health` - он
 печатает счётчики очереди и агентов того сервера, к которому подключён.
 
 ### «Стадия delivered, а результата нет»
@@ -306,9 +306,8 @@ Get-ChildItem 'scripts\*.ps1' | ForEach-Object {
 
 ### «Задача отклонена»
 
-**Причина:** формальная ошибка (схема), база вне `server.databases` или режим `harness` у
-клиента без `allow_harness`. Настоящая проверка базы по `.v8-project.json` - уже на машине
-агента.
+**Причина:** формальная ошибка (схема) или режим `harness` у клиента без
+`allow_harness`. База проверяется по `.v8-project.json` на машине агента.
 
 **Где смотреть:** `failed\rejected_<id>.json` на сервере (задача и перечень ошибок) и ответ
 `400` с полем `errors` - тексты те же.

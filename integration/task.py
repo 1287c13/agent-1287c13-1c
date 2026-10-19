@@ -1,19 +1,3 @@
-# -*- coding: utf-8 -*-
-"""Задача внешней интеграции: сборка из слотов, проверка формы и разрешение базы.
-
-Проверка разделена по машинам, потому что разделены знания:
-
-    validate_shape (сервер)   слоты, режим, отправитель, режим доставки. База
-                              сверяется с server.databases из deploy\\config.json -
-                              это перечисление для формы, а не путь к базе;
-    validate_task  (агент)    смысл задачи на машине харнесса: слот <база>
-                              разрешается по .v8-project.json, чтобы агент и не
-                              начинал работу с несуществующей базой.
-
-Формулировка контракта строится одной функцией build_prompt - и сервер, и
-командная строка, и агент дают один и тот же текст задачи.
-"""
-
 import json
 import os
 import re
@@ -23,9 +7,9 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
-from transport.config import project_root  # noqa: E402
-from transport.schema import format_errors, read_schema, validate  # noqa: E402
-from transport.store import DEFAULT_TIMEOUT_S, host_name, new_task_id, now_iso  # noqa: E402
+from transport.config import project_root
+from transport.schema import format_errors, read_schema, validate
+from transport.store import DEFAULT_TIMEOUT_S, host_name, new_task_id, now_iso
 
 MODES = ('db', 'harness')
 DELIVER_MODES = ('uri', 'manual', 'echo', 'auto')
@@ -38,17 +22,11 @@ PROMPT_HARNESS_SHORT = 'как инженер харнесса сделай {act
 
 
 def one_line(text):
-    """Формулировка задачи - одна строка: переводы строк и кратные пробелы схлопываются."""
     text = (text or '').replace('\r', ' ').replace('\n', ' ')
     return re.sub(r'\s{2,}', ' ', text).strip()
 
 
 def build_prompt(role, action, goal, db=None, mode='db'):
-    """Текст задачи в формате контракта.
-
-    Для mode='harness' слот базы не ставится. Пустая цель - не ошибка: формулировка
-    тогда заканчивается действием, а не оборванным «чтобы».
-    """
     action = one_line(action)
     goal = one_line(goal)
     if mode == 'harness':
@@ -62,7 +40,6 @@ def build_prompt(role, action, goal, db=None, mode='db'):
 
 def make_task(role, action, goal, db=None, mode='db', source='http', deliver='auto',
               timeout_s=DEFAULT_TIMEOUT_S, note=None, client=None, task_id=None):
-    """Собрать задачу: идентификатор, время, отправитель, формулировка контракта."""
     mode = mode if mode in MODES else 'db'
     if mode == 'harness':
         db = None
@@ -87,18 +64,11 @@ def make_task(role, action, goal, db=None, mode='db', source='http', deliver='au
 
 
 def task_schema(root):
-    """Схема задачи из integration\\schemas."""
     return read_schema(os.path.join(project_root(root), 'integration', 'schemas',
                                     'task_schema.json'))
 
 
 def validate_shape(cfg, payload, client):
-    """Проверить форму задачи на сервере. Возвращает (задача, список ошибок).
-
-    Форму присылает браузер или внешний клиент: слоты контракта, режим и необязательный
-    режим доставки. Идентификатор, время, отправитель и формулировку присваивает сервер -
-    клиент их не задаёт, иначе он мог бы подменить отправителя в журнале.
-    """
     if not isinstance(payload, dict):
         return None, ['тело запроса должно быть объектом JSON']
     client = client or {}
@@ -124,23 +94,11 @@ def validate_shape(cfg, payload, client):
     else:
         if not task.get('db'):
             errors.append('режим db: не заполнен слот базы')
-        else:
-            known = [str(x).strip().lower() for x in
-                     (cfg.get('server') or {}).get('databases') or []]
-            if known and task['db'].strip().lower() not in known:
-                errors.append('режим db: базы «%s» нет в server.databases (%s)'
-                              % (task['db'], ', '.join(known)))
     return task, errors
 
 
 
 def validate_task(root, raw):
-    """Проверить задачу на машине агента: схема плюс разрешение слота <база>.
-
-    Здесь и только здесь есть .v8-project.json, поэтому только здесь проверяется,
-    что база существует. Ошибка означает, что задачу нельзя выполнять: агенту
-    нечего открывать.
-    """
     task = normalize_task(raw)
     errors = list(validate(task, task_schema(root), 'задача'))
     if task.get('mode') == 'db':
@@ -154,7 +112,6 @@ def validate_task(root, raw):
 
 
 def normalize_task(raw):
-    """Достроить поля, которые агент мог получить не полностью. Исходный словарь не меняется."""
     task = dict(raw or {})
     task.setdefault('id', new_task_id())
     task.setdefault('created_at', now_iso())
@@ -179,7 +136,6 @@ def normalize_task(raw):
 
 
 def load_databases(root):
-    """Записи баз из .v8-project.json. Пустой список - файла нет или он нечитаем."""
     path = os.path.join(project_root(root), DBS_FILE)
     if not os.path.isfile(path):
         return []
@@ -192,12 +148,6 @@ def load_databases(root):
 
 
 def resolve_db(root, value):
-    """Найти запись базы по id, имени, алиасу или пути.
-
-    Возвращает пару (запись_или_None, пояснение). Отправитель задачу по этому правилу
-    не отклоняет: список баз у сервера - перечисление для формы, а путь к базе есть
-    только на машине агента.
-    """
     if not value:
         return None, 'слот базы пуст'
     probe = one_line(value)
@@ -217,5 +167,4 @@ def resolve_db(root, value):
 
 
 def errors_to_text(task, errors):
-    """Сообщение о непринятой задаче - одной строкой, с идентификатором."""
     return 'задача %s отклонена: %s' % ((task or {}).get('id', '?'), format_errors(errors))

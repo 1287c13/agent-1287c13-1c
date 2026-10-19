@@ -9,9 +9,6 @@
 <body>
   <header class="top">
     <h1>Очередь задач агента 1С</h1>
-    <p class="sub">Сервер держит очередь, watcher забирает задачи и передаёт их в Cline.
-      Страница ничего не опрашивает на простое: запросы идут при входе, отправке задачи
-      и пока поставленная задача не завершена.</p>
   </header>
 
   <section class="card" id="auth-card">
@@ -23,11 +20,6 @@
       <button id="btn-connect" type="button">Войти</button>
       <span id="conn-state" class="state"></span>
     </div>
-    <p class="state">Адрес сервера не спрашивается: страница получена с него же, поэтому
-      запросы идут по её собственному адресу. Достаточно ключа клиента.</p>
-    <p class="warn">Ключ хранится в localStorage браузера открытым текстом: любой, у кого
-      есть доступ к этому профилю, сможет поставить задачу. На общем компьютере ключ
-      не сохраняйте, а после работы нажмите «Забыть все ключи».</p>
     <div id="keys-box" class="keys"></div>
   </section>
 
@@ -42,8 +34,7 @@
           </select>
         </label>
         <label id="db-field">База
-          <input id="task-db" type="text" list="db-list" placeholder="id базы" autocomplete="off">
-          <datalist id="db-list"></datalist>
+          <input id="task-db" type="text" placeholder="id базы" autocomplete="off">
         </label>
         <label>Роль
           <input id="task-role" type="text" value="программист 1С">
@@ -58,12 +49,10 @@
         </label>
       </div>
       <label class="wide">Что сделать
-        <textarea id="task-action" rows="3" required
-          placeholder="например: найди документы, где не заполнен склад"></textarea>
+        <textarea id="task-action" rows="3" required placeholder="что сделать"></textarea>
       </label>
-      <label class="wide">Зачем (критерий готовности, необязательно)
-        <textarea id="task-goal" rows="2"
-          placeholder="например: список документов с причиной и проверкой запросом"></textarea>
+      <label class="wide">Цель (необязательно)
+        <textarea id="task-goal" rows="2" placeholder="критерий готовности"></textarea>
       </label>
       <div class="row">
         <label>Ждать результат, с

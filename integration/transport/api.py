@@ -1,33 +1,3 @@
-# -*- coding: utf-8 -*-
-"""HTTP-интерфейс сервера интеграции: очередь, агенты, ответы, страница задач.
-
-Маршруты (одинаковые для WSGI на Passenger и для локального http_server.py):
-
-    GET  /                       страница задач (integration\\web)
-    GET  /app.js, /style.css     её файлы
-    POST /api/auth               проверить ключ (без ключа): кто я и какие базы известны
-    GET  /api/health             состояние очереди и агентов (без ключа)
-    POST /api/task               поставить задачу: 202 {task_id, prompt, status_url}
-    GET  /api/status/<id>        состояние задачи
-    GET  /api/status?ids=a,b     состояния пачки задач (опрос после отправки)
-    GET  /api/history?limit=     последние задачи
-    GET  /api/answer/<id>        ответ задачи: format=md (по умолчанию) или html
-    GET  /api/agents             отметки агентов
-    GET  /api/config             список баз и публичный адрес (после входа)
-    GET  /api/events?limit=      последние события очереди
-    POST /api/agent/claim        агент берёт задачу (ключ агента)
-    POST /api/agent/progress     стадия задачи: claimed/delivered/running
-    POST /api/agent/result       итог задачи: done/error/failed/timeout
-    POST /api/agent/reclaim      вернуть задачи с истёкшим claim, закрыть просроченные
-
-Почему ключ, а не токен в теле: клиент определяется по ключу, и поле client в задаче
-присваивает сервер. Иначе отправитель мог бы назваться чужим именем, а журнал задач
-перестал бы отвечать на вопрос «кто это поставил».
-
-Почему стадии считает сервер: браузер не запрашивает ничего на простое. Он опрашивает
-статус только тех задач, которые сам поставил, и только пока они не завершены.
-"""
-
 import json
 import os
 import sys
@@ -37,11 +7,11 @@ _INTEGRATION = os.path.dirname(_HERE)
 if _INTEGRATION not in sys.path:
     sys.path.insert(0, _INTEGRATION)
 
-import md_to_html  # noqa: E402
-from task import errors_to_text, validate_shape  # noqa: E402
-from transport.config import (client_by_key, load_config, project_root,  # noqa: E402
+import md_to_html
+from task import errors_to_text, validate_shape
+from transport.config import (client_by_key, load_config, project_root,
                               public_server_view)
-from transport.store import (DEFAULT_CLAIM_TTL_S, QueueStore, preview,  # noqa: E402
+from transport.store import (DEFAULT_CLAIM_TTL_S, QueueStore, preview,
                              safe_name)
 
 WEB_DIR = os.path.join(_INTEGRATION, 'web')
@@ -54,7 +24,6 @@ MAX_STATUS_IDS = 100
 
 
 class Response(object):
-    """Ответ транспорту: либо JSON-объект, либо готовые байты (статика)."""
 
     def __init__(self, status=200, payload=None, body=None,
                  content_type='application/json; charset=utf-8', headers=None):
@@ -74,7 +43,6 @@ class Response(object):
 
 
 class Api(object):
-    """Логика сервера поверх QueueStore."""
 
     def __init__(self, root=None, config=None, config_path=None):
         self.root = project_root(root)
@@ -84,7 +52,6 @@ class Api(object):
         self.store = QueueStore(config['server']['root'])
         self.store.ensure()
 
-    # --- вспомогательное -----------------------------------------------------
 
     def _origin(self):
         return (self.config.get('server') or {}).get('cors_origin') or '*'
@@ -94,7 +61,6 @@ class Api(object):
 
     @staticmethod
     def _token(headers, query):
-        """Ключ из X-Integration-Token либо Authorization: Bearer."""
         headers = headers or {}
         token = headers.get('x-integration-token') or headers.get('X-Integration-Token') or ''
         if not token:
@@ -106,7 +72,6 @@ class Api(object):
         return token
 
     def _client(self, headers, query):
-        """Клиент по ключу. (клиент_или_None, ответ_об_ошибке_или_None)."""
         clients = (self.config.get('server') or {}).get('clients') or []
         if not clients:
             return None, self._json(503, {
@@ -119,10 +84,8 @@ class Api(object):
                 'hint': 'заголовок X-Integration-Token или Authorization: Bearer'})
         return client, None
 
-    # --- маршруты ------------------------------------------------------------
 
     def health(self):
-        """Состояние сервера: счётчики, агенты, замечания настроек. Без путей."""
         counts = self.store.counts()
         agents = [{k: a.get(k) for k in ('name', 'state', 'task_id', 'updated_at', 'age_s', 'alive')}
                   for a in self.store.agents()]
@@ -135,7 +98,6 @@ class Api(object):
         })
 
     def auth(self, payload):
-        """Проверка ключа: клиент, разрешение задач по харнессу, список баз."""
         clients = (self.config.get('server') or {}).get('clients') or []
         if not clients:
             return self._json(503, {'ok': False,
@@ -151,10 +113,6 @@ class Api(object):
                      'allow_harness': bool(client.get('allow_harness'))})
         return self._json(200, view)
 
-    def server_config(self):
-        """Что нужно форме после входа: базы, публичный адрес, версия."""
-        return self._json(200, public_server_view(self.config))
-
     def agents(self):
         return self._json(200, {'items': self.store.agents()})
 
@@ -165,7 +123,6 @@ class Api(object):
             limit = 50
 
     def submit(self, payload, client):
-        """Принять задачу от клиента: проверка формы, запись в inbox, ответ 202."""
         task, errors = validate_shape(self.config, payload, client)
         if errors:
             task_id = (task or {}).get('id')
@@ -232,10 +189,8 @@ class Api(object):
                                 'content': content})
 
 
-    # --- работа агента -------------------------------------------------------
 
     def claim(self, payload, client):
-        """Агент берёт задачу. Пустая очередь - task=None и подсказка паузы."""
         payload = payload if isinstance(payload, dict) else {}
         agent = safe_name(str(payload.get('agent') or client.get('name') or 'agent'))
         try:
@@ -252,7 +207,6 @@ class Api(object):
         return self._json(200, {'task': task, 'agent': agent})
 
     def progress(self, payload, client):
-        """Стадия задачи от агента: delivered, running (и продление claim)."""
         payload = payload if isinstance(payload, dict) else {}
         task_id = str(payload.get('id') or '')
         stage = str(payload.get('stage') or '')
@@ -269,7 +223,6 @@ class Api(object):
                                 'note': note})
 
     def result(self, payload, client):
-        """Итог задачи от агента: ответ, поля отчёта, статус."""
         payload = payload if isinstance(payload, dict) else {}
         task_id = str(payload.get('id') or '')
         agent = safe_name(str(payload.get('agent') or client.get('name') or 'agent'))
@@ -292,16 +245,13 @@ class Api(object):
                                 'duration_s': stored.get('duration_s')})
 
     def reclaim(self):
-        """Вернуть задачи с истёкшим claim и закрыть просроченные."""
         actions = self.store.reclaim_stale()
         timed_out = self.store.sweep_timeouts()
         return self._json(200, {'reclaimed': actions, 'timed_out': timed_out})
 
 
-    # --- статика -------------------------------------------------------------
 
     def _static(self, name):
-        """Файл страницы задач из integration\\web."""
         path = os.path.join(WEB_DIR, name)
         if not os.path.isfile(path):
             return None
@@ -310,10 +260,8 @@ class Api(object):
         return Response(200, body=body,
                         content_type=STATIC_TYPES.get(name, 'application/octet-stream'))
 
-    # --- маршрутизация -------------------------------------------------------
 
     def dispatch(self, method, path, payload=None, query=None, headers=None):
-        """Маршрутизация. Возвращает Response; исключения обрабатывает транспорт."""
         method = (method or 'GET').upper()
         clean = '/' + (path or '/').strip('/')
         if method == 'OPTIONS':
@@ -345,8 +293,6 @@ class Api(object):
         if error is not None:
             return error
 
-        if clean == '/api/config' and method in ('GET', 'HEAD'):
-            return self.server_config()
         if clean == '/api/task' and method == 'POST':
             return self.submit(payload, client)
         if clean == '/api/history' and method in ('GET', 'HEAD'):

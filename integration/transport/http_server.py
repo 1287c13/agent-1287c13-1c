@@ -1,16 +1,3 @@
-# -*- coding: utf-8 -*-
-"""Сервер разработки: то же WSGI-приложение на стандартном wsgiref.
-
-Нужен, когда Passenger на этой машине недоступен (Windows, локальная проверка).
-Ничего своего в маршрутах нет: приложение берётся из transport\\wsgi.py, поэтому
-локальная проверка и хостинг исполняют один код.
-
-    py -3 integration\\transport\\http_server.py --port 8760
-    curl http://127.0.0.1:8760/api/health
-
-Слушает только localhost по умолчанию: это инструмент проверки, а не публикация.
-"""
-
 import argparse
 import os
 import sys
@@ -22,18 +9,16 @@ _INTEGRATION = os.path.dirname(_HERE)
 if _INTEGRATION not in sys.path:
     sys.path.insert(0, _INTEGRATION)
 
-from transport.store import setup_stdio  # noqa: E402
-from transport.wsgi import get_api, make_app  # noqa: E402
+from transport.store import setup_stdio
+from transport.wsgi import get_api, make_app
 
 
 class ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
-    """Запросы обрабатываются параллельно: без этого долгий ответ держит весь сервер."""
 
     daemon_threads = True
 
 
 class RequestHandler(WSGIRequestHandler):
-    """Строки доступа в stderr, отключаются ключом --quiet."""
 
     def log_message(self, fmt, *args):
         if not getattr(self.server, 'quiet', False):

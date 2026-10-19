@@ -1,37 +1,3 @@
-# -*- coding: utf-8 -*-
-"""Доставка задачи в Cline на машине агента: URI VS Code, ручной режим, echo.
-
-Мостик к Cline - встроенный обработчик URI расширения saoudrizwan.claude-dev:
-
-    vscode://saoudrizwan.claude-dev/task?prompt=<текст>
-
-Обработчик создаёт новую задачу Cline с этим текстом, то есть человеку в чат писать
-не нужно. Ограничения, из которых следует устройство файла:
-
-- **длина.** URI идёт через реестр Windows и командную строку, поэтому в нём едет
-  только короткая ссылка на файл формулировки, а полный текст лежит в рабочем
-  каталоге задачи temp\\queue\\<id>\\prompt.txt;
-- **кодирование.** Пробел обязан быть %20, знак + в URI - литерал, а не пробел:
-  текст кодируется quote(safe='') целиком;
-- **один сеанс - одна задача.** Cline не ведёт две задачи одновременно, поэтому
-  watcher берёт следующую задачу только после завершения текущей.
-
-Режимы (agent.deliver в настройках, ключ --deliver у watcher.py):
-
-    uri      открыть URI - задача создаётся в Cline (по умолчанию);
-    manual   ничего не открывать: напечатать URI и строку запуска;
-    echo     не трогать Cline совсем: только рабочий каталог (проверка цепочки).
-
-Доставка не заканчивается открытием ссылки. Обработчик URI у Cline работает только при
-видимой панели Cline, поэтому «ссылка принята оболочкой» - не результат. После открытия
-задача ищется в журнале сессий Cline (transport\\cline.py): появилась сессия с
-идентификатором задачи - доставка подтверждена; не появилась - попытка повторяется, а
-в итоге отправитель получает «не подтверждено» и путь к файлу формулировки.
-
-Функция ничего не пишет в очередь: очередь живёт на сервере, а здесь только рабочий
-каталог задачи на машине агента. Итог доставки watcher отправляет на сервер стадией.
-"""
-
 import os
 import subprocess
 import sys
@@ -42,8 +8,8 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
-from transport import cline  # noqa: E402
-from transport.store import write_text_atomic  # noqa: E402
+from transport import cline
+from transport.store import write_text_atomic
 
 URI_TASK = 'vscode://saoudrizwan.claude-dev/task?prompt='
 MODES = ('uri', 'manual', 'echo')
@@ -69,7 +35,6 @@ delivered. Ответ в чате отправителю не виден: чит
 
 
 def build_prompt_text(task, work_dir):
-    """Полный текст задачи для Cline: формулировка, файл ответа и команда записи."""
     return DEFAULT_TEMPLATE % {
         'id': task['id'],
         'client': task.get('client') or 'неизвестен',
@@ -81,12 +46,10 @@ def build_prompt_text(task, work_dir):
 
 
 def build_uri(text):
-    """URI задачи: текст кодируется целиком, пробел - %20, плюс - литерал."""
     return URI_TASK + urllib.parse.quote(text or '', safe='')
 
 
 def short_uri_text(task, prompt_path, answer_path):
-    """Короткая ссылка для URI: полный текст лежит в файле, в ссылку он не влезает."""
     return ('Задача интеграции %s. Формулировка и порядок завершения: %s. '
             'Файл ответа: %s. Записать результат: py -3 integration\\agent.py '
             '--write-result --task %s --file "%s"'
@@ -94,17 +57,15 @@ def short_uri_text(task, prompt_path, answer_path):
 
 
 def build_command_line(uri):
-    """Строка запуска для ручного режима: её человек вставляет в Win+R или терминал."""
     if os.name == 'nt':
         return 'start "" "%s"' % uri
     return 'xdg-open "%s"' % uri
 
 
 def open_uri(uri):
-    """Открыть ссылку штатным обработчиком. Возвращает (открыто, чем, пояснение)."""
     try:
         if os.name == 'nt':
-            os.startfile(uri)  # noqa: S606 - обработчик URI, не файл
+            os.startfile(uri)
             return True, 'startfile', 'ссылка передана оболочке Windows'
         if sys.platform == 'darwin':
             subprocess.Popen(['open', uri])
@@ -117,11 +78,6 @@ def open_uri(uri):
 
 def deliver(task, work_dir, mode='uri', allow_gui=True, confirm_timeout=None, attempts=3,
             cline_data=None, cline_work_dir=None):
-    """Передать задачу в Cline выбранным режимом.
-
-    Рабочий каталог задачи создаётся здесь: prompt.txt (полный текст) и место под
-    answer.md, который заполнит агент, выполнивший задачу.
-    """
     if mode not in MODES:
         mode = 'uri'
     if not os.path.isdir(work_dir):

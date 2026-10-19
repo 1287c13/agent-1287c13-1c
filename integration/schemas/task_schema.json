@@ -1,83 +1,90 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "Задача внешней интеграции (integration-v1)",
-  "description": "Одна задача: файл очереди inbox\\task_<id>.json на сервере. Проверяет integration\\transport\\schema.py.",
   "type": "object",
-  "additionalProperties": true,
-  "required": ["id", "created_at", "source", "mode", "role", "action", "prompt"],
+  "required": [
+    "id",
+    "created_at",
+    "source",
+    "mode",
+    "role",
+    "action",
+    "prompt"
+  ],
   "properties": {
     "id": {
       "type": "string",
-      "pattern": "^t-[0-9]{8}-[0-9]{6}-[0-9a-f]{6}$",
-      "description": "Идентификатор задачи: t-<ГГГГММДД>-<ЧЧММСС>-<6 hex>. Его присваивает сервер при постановке задачи."
+      "pattern": "^t-[0-9]{8}-[0-9]{6}-[0-9a-f]{6}$"
     },
     "created_at": {
       "type": "string",
-      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$",
-      "description": "Местное время создания, ISO без зоны: ГГГГ-ММ-ДДTЧЧ:ММ:СС."
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$"
     },
     "source": {
       "type": "string",
-      "enum": ["http", "cli"],
-      "description": "Кто поставил задачу: http (браузер или внешний клиент через сервер), cli (командная строка agent.py). Присваивает сервер."
+      "enum": [
+        "http",
+        "cli"
+      ]
     },
     "client": {
       "type": "string",
-      "maxLength": 120,
-      "description": "Имя машины и пользователя отправителя: <COMPUTERNAME>\\<USERNAME>, заполняет отправитель."
+      "maxLength": 120
     },
     "mode": {
       "type": "string",
-      "enum": ["db", "harness"],
-      "description": "db - задача по базе 1С (слот <база> обязателен), harness - задача по самому инструменту агента (базы нет). Режим harness разрешён только клиенту с allow_harness в server.clients."
+      "enum": [
+        "db",
+        "harness"
+      ]
     },
     "role": {
       "type": "string",
       "minLength": 2,
-      "maxLength": 120,
-      "description": "Роль: программист 1С, тестировщик, аналитик, администратор (окно задач предлагает именно их), инженер харнесса - только из командной строки харнесса. Роль задаёт вид задачи: «инженер харнесса» - задача по инструменту (mode=harness), остальные - по базе."
+      "maxLength": 120
     },
     "action": {
       "type": "string",
       "minLength": 2,
-      "maxLength": 2000,
-      "description": "Что сделать - слот <действие> контракта."
+      "maxLength": 2000
     },
     "db": {
-      "type": ["string", "null"],
-      "maxLength": 300,
-      "description": "Слот <база>: id, алиас, name или путь. Сервер сверяет id со списком server.databases, агент на своей машине разрешает его по .v8-project.json. Для mode=harness - null."
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 300
     },
     "goal": {
       "type": "string",
       "minLength": 2,
-      "maxLength": 2000,
-      "description": "Необязательный критерий готовности - слот <цель>. Если поле не заполнено, его в задаче нет, а формулировка обходится без «чтобы <цель>»; из цели строится строка «Проверка»."
+      "maxLength": 2000
     },
     "prompt": {
       "type": "string",
       "minLength": 8,
-      "maxLength": 4000,
-      "description": "Готовая формулировка контракта одной строкой: как <роль> сделай <действие> [в базе <база>] [чтобы <цель>] по START.md."
+      "maxLength": 4000
     },
     "deliver": {
       "type": "string",
-      "enum": ["uri", "manual", "echo", "auto"],
-      "description": "Режим доставки в Cline для этой задачи. auto - режим по умолчанию канала (флаг --deliver watcher-а)."
+      "enum": [
+        "uri",
+        "manual",
+        "echo",
+        "auto"
+      ]
     },
     "timeout_s": {
-      "type": "integer",
-      "description": "Сколько секунд ждать результат, прежде чем пометить задачу как timeout. По умолчанию 1800."
+      "type": "integer"
     },
     "priority": {
       "type": "string",
-      "enum": ["normal", "high"],
-      "description": "Резерв на будущее: очередь разбирается строго по порядку поступления."
+      "enum": [
+        "normal",
+        "high"
+      ]
     },
     "note": {
       "type": "string",
-      "maxLength": 500,
-      "description": "Произвольная пометка отправителя; на разбор задачи не влияет."
+      "maxLength": 500
     }
   }
 }

@@ -1,30 +1,12 @@
 'use strict';
 
-/*
- * Страница очереди: вход по ключу, постановка задачи, ожидание стадий, история.
- *
- * Политика опроса: браузер не опрашивает сервер на простое. Запросы идут при загрузке
- * страницы (проверка сохранённого ключа), при входе, при отправке задачи и пока
- * поставленная задача не завершена. Интервал ожидания растёт 3 -> 5 -> 10 -> 20 -> 30 с,
- * на скрытой вкладке опрос замирает, после возврата - сразу один запрос.
- * Ни SSE, ни WebSocket: каждый открытый поток занимает процесс Passenger, а очередь
- * меняется редко и адресно - по идентификатору своей задачи.
- */
-
 (function () {
   var STORE = {
     keys: 'integration.keys',
-    active: 'integration.activeKey',
-    legacyUrl: 'integration.serverUrl'
+    active: 'integration.activeKey'
   };
   var POLL_DELAYS = [3000, 5000, 10000, 20000, 30000];
 
-  /*
-   * Адрес API не спрашивается и не хранится: страницу отдал сам сервер, значит её адрес
-   * и есть адрес очереди. Берётся каталог страницы, а не только origin: под Passenger
-   * сайт может жить не в корне домена (/agent, /agent/, /agent/index.html), и /api/...
-   * должен уходить туда же.
-   */
   var BASE = (function () {
     if (!/^https?:$/.test(window.location.protocol)) { return ''; }
     var path = window.location.pathname || '/';
@@ -44,7 +26,6 @@
     key: '',
     client: '',
     allowHarness: false,
-    databases: [],
     currentId: '',
     lastId: '',
     pollStep: 0,
@@ -74,8 +55,6 @@
     node.className = 'state' + (kind ? ' ' + kind : '');
   }
 
-  // --- сохранённые ключи ----------------------------------------------------
-
   function readJson(name, fallback) {
     try {
       var raw = localStorage.getItem(name);
@@ -86,7 +65,7 @@
   }
 
   function writeJson(name, value) {
-    try { localStorage.setItem(name, JSON.stringify(value)); } catch (error) { /* режим приватности */ }
+    try { localStorage.setItem(name, JSON.stringify(value)); } catch (error) { }
   }
 
   function savedKeys() {
@@ -155,7 +134,7 @@
   }
 
   function forgetAll() {
-    if (!window.confirm('Удалить все сохранённые ключи из этого браузера? Восстановить их будет нельзя.')) {
+    if (!window.confirm('Удалить все ключи из браузера?')) {
       return;
     }
     localStorage.removeItem(STORE.keys);
@@ -165,8 +144,6 @@
     disconnect('все ключи удалены из браузера');
     renderKeys();
   }
-
-  // --- сеть -----------------------------------------------------------------
 
   function api(path, options) {
     options = options || {};
@@ -200,12 +177,9 @@
     });
   }
 
-  // --- вход и форма ---------------------------------------------------------
-
   function connect(silent) {
     if (!BASE) {
-      setText('conn-state', 'страница открыта не с сервера: адрес очереди неизвестен. ' +
-        'Откройте адрес сервера в браузере', 'bad');
+      setText('conn-state', 'страница открыта не с сервера', 'bad');
       return Promise.resolve(false);
     }
     state.key = el('api-key').value || '';
@@ -213,11 +187,9 @@
     return api('/api/auth', { method: 'POST', body: { key: state.key } }).then(function (data) {
       state.client = data.client || '';
       state.allowHarness = Boolean(data.allow_harness);
-      state.databases = data.databases || [];
       localStorage.setItem(STORE.active, state.key);
       rememberKey(state.key);
       renderKeys();
-      renderDatabases();
       renderMode();
       setText('conn-state', 'вход выполнен: ' + state.client, 'ok');
       el('submit-card').hidden = false;
@@ -238,19 +210,6 @@
     setText('conn-state', reason || 'не подключено');
     el('submit-card').hidden = true;
     el('history-card').hidden = true;
-  }
-
-  function renderDatabases() {
-    var list = el('db-list');
-    list.innerHTML = '';
-    state.databases.forEach(function (name) {
-      var option = document.createElement('option');
-      option.value = name;
-      list.appendChild(option);
-    });
-    if (!el('task-db').value && state.databases.length) {
-      el('task-db').value = state.databases[0];
-    }
   }
 
   function renderMode() {
@@ -295,8 +254,6 @@
       el('btn-submit').disabled = false;
     });
   }
-
-  // --- ожидание стадий ------------------------------------------------------
 
   function startPolling(taskId) {
     state.currentId = taskId;
@@ -357,8 +314,6 @@
   }
 
 
-
-  // --- ответ и история ------------------------------------------------------
 
   function loadAnswer(kind) {
     var taskId = state.lastId;
@@ -426,10 +381,7 @@
     });
   }
 
-  // --- запуск ---------------------------------------------------------------
-
   document.addEventListener('DOMContentLoaded', function () {
-    localStorage.removeItem(STORE.legacyUrl);
     var active = localStorage.getItem(STORE.active) || '';
     el('api-key').value = active;
     state.key = active;

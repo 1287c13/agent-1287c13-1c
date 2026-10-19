@@ -1,19 +1,3 @@
-# -*- coding: utf-8 -*-
-"""WSGI-приложение сервера интеграции: Passenger, gunicorn, wsgiref - один код.
-
-Приложение не зависит от того, кто его вызвал. Базовый URI, под которым сайт
-опубликован (например /agent), приходит в SCRIPT_NAME - WSGI-сервер уже отделил его
-от PATH_INFO; обёртка дополнительно срезает префикс, если сервер оставил путь целиком.
-
-Тело запроса читается по CONTENT_LENGTH и ограничено server.max_body: задача - это
-несколько строк текста, а не поток. Ответ всегда JSON, кроме страницы задач
-(index.html, app.js, style.css) из integration\\web.
-
-Экземпляр Api собирается один раз на процесс: конфиг читается при первом запросе,
-каталоги очереди создаются там же. Если конфиг битый, сервер отвечает 503 с причиной,
-а не падает на старте Passenger молчаливой 500.
-"""
-
 import json
 import os
 import sys
@@ -25,7 +9,7 @@ _INTEGRATION = os.path.dirname(_HERE)
 if _INTEGRATION not in sys.path:
     sys.path.insert(0, _INTEGRATION)
 
-from transport.api import Api, Response  # noqa: E402
+from transport.api import Api, Response
 
 REASONS = {
     200: 'OK', 202: 'Accepted', 204: 'No Content', 400: 'Bad Request',
@@ -38,8 +22,6 @@ _STATE = {}
 
 
 def get_api(root=None, config_path=None):
-    """Api на процесс. Ключ - корень и файл настроек: два сайта в одном процессе редки,
-    но перепутать очереди хуже, чем один лишний экземпляр."""
     root = root or os.environ.get('INTEGRATION_ROOT') or None
     config_path = config_path or os.environ.get('INTEGRATION_CONFIG') or None
     key = (os.path.abspath(root) if root else '', os.path.abspath(config_path) if config_path else '')
@@ -49,8 +31,6 @@ def get_api(root=None, config_path=None):
 
 
 def _cors(api, environ):
-    """Заголовки CORS: браузер обращается к серверу с другого адреса (страница локальная
-    или на другом домене). origin берётся из настроек, а не от запроса."""
     origin = (api.config.get('server') or {}).get('cors_origin') or '*'
     return [
         ('Access-Control-Allow-Origin', origin),
@@ -61,7 +41,6 @@ def _cors(api, environ):
 
 
 def _read_json(environ, max_body):
-    """Тело запроса: (payload, ошибка). Ошибка - текст для 400/413."""
     try:
         length = int(environ.get('CONTENT_LENGTH') or 0)
     except (TypeError, ValueError):
@@ -84,7 +63,6 @@ def _error_response(status, message):
 
 
 def handle(api, environ):
-    """Разобрать окружение WSGI и вернуть Response."""
     method = environ.get('REQUEST_METHOD') or 'GET'
     path = environ.get('PATH_INFO') or '/'
     base = environ.get('SCRIPT_NAME') or ''
@@ -104,13 +82,12 @@ def handle(api, environ):
 
 
 def make_app(root=None, config_path=None, debug=False):
-    """Собрать WSGI-приложение. debug - показывать трассировку в ответе 500."""
 
     def application(environ, start_response):
         try:
             api = get_api(root, config_path)
             response = handle(api, environ)
-        except Exception as exc:  # noqa: BLE001 - приложение не должно падать в сокет
+        except Exception as exc:
             sys.stderr.write('%s\n' % traceback.format_exc())
             if debug:
                 message = 'внутренняя ошибка сервера интеграции: %s' % exc

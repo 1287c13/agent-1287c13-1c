@@ -1,14 +1,8 @@
 {
-  "comment": "Настройки интеграции. Скопируйте в deploy\\config.json и правьте копию: config.json не попадает в git (содержит ключи доступа).",
   "python": "py -3",
   "server": {
     "host": "127.0.0.1",
     "port": 8760,
-    "public_url": "",
-    "root": "queue",
-    "cors_origin": "*",
-    "max_body": 262144,
-    "databases": ["ka2", "demo-ssl"],
     "clients": [
       { "name": "browser", "key": "change-me-browser", "allow_harness": false },
       { "name": "agent-01", "key": "change-me-agent", "allow_harness": true }
@@ -18,9 +12,6 @@
     "name": "agent-01",
     "server_url": "http://127.0.0.1:8760",
     "key": "change-me-agent",
-    "deliver": "uri",
-    "interval": 2.0,
-    "idle_interval": 15.0,
-    "claim_ttl_s": 300
+    "deliver": "uri"
   }
 }
