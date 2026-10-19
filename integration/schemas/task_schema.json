@@ -21,8 +21,7 @@
     "source": {
       "type": "string",
       "enum": [
-        "http",
-        "cli"
+        "http"
       ]
     },
     "client": {
@@ -74,13 +73,6 @@
     },
     "timeout_s": {
       "type": "integer"
-    },
-    "priority": {
-      "type": "string",
-      "enum": [
-        "normal",
-        "high"
-      ]
     },
     "note": {
       "type": "string",

@@ -5,7 +5,6 @@ deploy/config.json
 dump/
 
 # --- служебное и временное ---
-logs/
 cache/
 .code-index/
 temp/

@@ -96,7 +96,7 @@ Cline (VS Code)
 │                                  watcher, командная строка агента, мост к Cline
 ├── mcp/                           доки и пример конфигурации по MCP-серверам
 ├── queue/                         очередь задач на сервере: inbox, processing, archive, outbox,
-│                                  failed, agents, events.jsonl (в git не хранится;
+│                                  failed, agents (в git не хранится;
 │                                  устройство - docs\07-external-integration.md)
 ├── scripts/                       install / start / check / publish + start-toolkit / stop-toolkit / vanessa-run / new-analysis
 ├── temp/                          временные файлы задач, включая сценарии .feature (в git не хранится)

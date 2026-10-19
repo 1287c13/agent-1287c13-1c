@@ -11,8 +11,7 @@ import md_to_html
 from task import errors_to_text, validate_shape
 from transport.config import (client_by_key, load_config, project_root,
                               public_server_view)
-from transport.store import (DEFAULT_CLAIM_TTL_S, QueueStore, preview,
-                             safe_name)
+from transport.store import DEFAULT_CLAIM_TTL_S, QueueStore, safe_name
 
 WEB_DIR = os.path.join(_INTEGRATION, 'web')
 STATIC_TYPES = {
@@ -52,9 +51,6 @@ class Api(object):
         self.store = QueueStore(config['server']['root'])
         self.store.ensure()
 
-
-    def _origin(self):
-        return (self.config.get('server') or {}).get('cors_origin') or '*'
 
     def _json(self, status, payload):
         return Response(status, payload=payload)
@@ -115,12 +111,6 @@ class Api(object):
 
     def agents(self):
         return self._json(200, {'items': self.store.agents()})
-
-    def events(self, query):
-        try:
-            limit = int(((query or {}).get('limit') or ['50'])[0])
-        except (ValueError, TypeError, IndexError):
-            limit = 50
 
     def submit(self, payload, client):
         task, errors = validate_shape(self.config, payload, client)
@@ -301,8 +291,6 @@ class Api(object):
             return self.statuses(query)
         if clean == '/api/agents' and method in ('GET', 'HEAD'):
             return self.agents()
-        if clean == '/api/events' and method in ('GET', 'HEAD'):
-            return self.events(query)
         prefix = '/api/status/'
         if clean.startswith(prefix) and method in ('GET', 'HEAD'):
             return self.status(clean[len(prefix):])

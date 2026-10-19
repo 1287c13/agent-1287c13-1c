@@ -2,7 +2,7 @@ import argparse
 import os
 import sys
 from socketserver import ThreadingMixIn
-from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
+from wsgiref.simple_server import WSGIServer, make_server
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _INTEGRATION = os.path.dirname(_HERE)
@@ -18,13 +18,6 @@ class ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
     daemon_threads = True
 
 
-class RequestHandler(WSGIRequestHandler):
-
-    def log_message(self, fmt, *args):
-        if not getattr(self.server, 'quiet', False):
-            sys.stderr.write('%s - %s\n' % (self.address_string(), fmt % args))
-
-
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog='http_server.py',
@@ -35,7 +28,6 @@ def main(argv=None):
                         help='файл настроек (по умолчанию deploy\\config.json)')
     parser.add_argument('--host', default=None, help='адрес прослушивания')
     parser.add_argument('--port', type=int, default=None, help='порт')
-    parser.add_argument('--quiet', action='store_true', help='не печатать строки доступа')
     args = parser.parse_args(argv)
 
     setup_stdio()
@@ -44,9 +36,7 @@ def main(argv=None):
     host = args.host or instance.config['server']['host']
     port = args.port or instance.config['server']['port']
 
-    server = make_server(host, port, app, server_class=ThreadingWSGIServer,
-                         handler_class=RequestHandler)
-    server.quiet = args.quiet
+    server = make_server(host, port, app, server_class=ThreadingWSGIServer)
     print('очередь: %s' % instance.store.base)
     print('слушаю http://%s:%d/ (Ctrl+C - стоп)' % (host, port))
     try:

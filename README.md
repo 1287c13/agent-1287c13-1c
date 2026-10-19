@@ -357,7 +357,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy\install-local.ps1
 `temp\queue\<id>\` на время задачи и удаляет его после записи результата.
 
 Проверка цепочки без Cline: `py -3 integration\agent.py --health`, `--list` и
-`py -3 integration\watcher.py --once --deliver echo`.
+`py -3 integration\watcher.py --deliver echo`.
 
 На публичном хостинге доступ закрыт ключами клиентов: `server.clients` в
 `deploy\config.json`, заголовок `X-Integration-Token` или `Authorization: Bearer`.
@@ -385,9 +385,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-harness.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-watcher.ps1
 ```
 
-Watcher работает фоном (окно консоли не нужно), пишет лог в `logs\watcher.log` и живёт, пока
-его не погасят явно: `scripts\stop-watcher.ps1`. Сбой отдельного прохода его не завершает -
-ошибка уходит в лог. Проверить, что он жив: `temp\queue\.watcher.lock` (обновляется каждый
+Watcher работает в своём окне консоли (его и открывает скрипт): там видны стадии задач и
+ошибки. Живёт, пока его не погасят явно: `scripts\stop-watcher.ps1`. Сбой отдельного прохода
+его не завершает. Проверить, что он жив: `temp\queue\.watcher.lock` (обновляется каждый
 проход), строка watcher-а в `scripts\check-harness.ps1` или `GET /api/health`.
 
 Без watcher задача остаётся в очереди на сервере и до агента не доходит - это самая частая
@@ -489,9 +489,8 @@ watcher уже работает, второй процесс не поднима
 | `integration/` | внешняя интеграция: сервер очереди (схемы, транспорт, WSGI, страница задач), watcher, командная строка агента, мост к Cline. Устройство - `docs/07-external-integration.md` (шаг 11) |
 | `integration/web/` | страница задач: вход по ключу, форма, стадии, история, ответ. Без сборки и внешних CDN |
 | `deploy/` | запуск интеграции: `install-local.ps1`, обёртки `run-*.bat` и образец настроек `config.example.json` (копия `config.json` в git не хранится) |
-| `queue/` | очередь задач на сервере: `inbox/processing/archive/outbox/failed/agents`, журнал `events.jsonl`. В git не хранится, каталог создаёт сервер; путь задаёт `server.root` |
+| `queue/` | очередь задач на сервере: `inbox/processing/archive/outbox/failed/agents`. В git не хранится, каталог создаёт сервер; путь задаёт `server.root` |
 | `temp/queue/` | рабочий каталог задачи на машине агента (`<id>\prompt.txt`, `answer.md`), pid и замок watcher-а. В git не хранится, задача убирает его за собой |
-| `logs/` | логи запусков харнесса, в том числе `logs\watcher.log` и `logs\watcher.err.log` от `scripts\start-watcher.ps1`. В git не хранится |
 | `docs/` | описание решения; `docs/legacy/` - документация первой версии, для установки не годится (скриптов, на которые она ссылается, в репозитории больше нет) |
 | `mcp/` | доки по трём MCP-серверам (`1c-mcp-toolkit`, `code-index-mcp`, `bsl-platform-help-context`) и образец конфигурации (в образце `<КОРЕНЬ>` заменяется на путь к харнессу) |
 

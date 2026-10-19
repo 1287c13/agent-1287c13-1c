@@ -72,7 +72,7 @@ def cline_work_dir(root):
 
 
 def work_dir_for(root, task_id):
-    pass
+    return os.path.join(root, 'temp', 'queue', task_id)
 
 
 def make_client(cfg, args):

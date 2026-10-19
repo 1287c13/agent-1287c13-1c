@@ -19,7 +19,6 @@ AGENT_DEFAULTS = {
     'interval': 2.0,
     'idle_interval': 15.0,
     'claim_ttl_s': 300,
-    'timeout_s': 1800,
 }
 
 
@@ -120,7 +119,6 @@ def load_config(root=None, path=None):
         agent['interval'],
         _as_float(raw_agent.get('idle_interval'), AGENT_DEFAULTS['idle_interval']))
     agent['claim_ttl_s'] = max(30, _as_int(raw_agent.get('claim_ttl_s'), AGENT_DEFAULTS['claim_ttl_s']))
-    agent['timeout_s'] = max(60, _as_int(raw_agent.get('timeout_s'), AGENT_DEFAULTS['timeout_s']))
 
     cfg = {
         'path': target,

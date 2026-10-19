@@ -7,7 +7,7 @@
     Пока он не работает, задача остаётся в очереди на сервере и до Cline не доходит.
     Поэтому watcher поднимают до постановки задач и держат запущенным: процесс живёт,
     пока его не погасят явно (scripts\stop-watcher.ps1). Сбой отдельного прохода его
-    не завершает - ошибка уходит в logs\watcher.log.
+    не завершает - ошибка печатается в окне watcher-а.
 
     Скрипт идемпотентен: если watcher уже работает, второй не поднимается (повторный
     запуск - только ключом -Force, который сначала гасит старый). Проверка идёт по
@@ -92,14 +92,11 @@ if (-not (Test-Path $watcher)) { throw "нет файла watcher-а: $watcher" 
 $workDir = Join-Path $Root 'temp\queue'
 $pidFile = Join-Path $workDir 'watcher.pid'
 $lockFile = Join-Path $workDir '.watcher.lock'
-$logDir = Join-Path $Root 'logs'
-$logFile = Join-Path $logDir 'watcher.log'
-$errFile = Join-Path $logDir 'watcher.err.log'
 
 $alive = Get-WatcherProcesses
 if ($alive.Count -gt 0 -and -not $Force) {
     Write-Host "[ok] watcher уже запущен: pid $(($alive | ForEach-Object { $_.ProcessId }) -join ', ')"
-    Write-Host "     режим: $Deliver, пауза: $intervalText с, лог: $logFile"
+    Write-Host "     режим: $Deliver, пауза: $intervalText с"
     Write-Host '     перезапуск: -Force; остановка: scripts\stop-watcher.ps1'
     exit 0
 }
@@ -110,7 +107,7 @@ if ($alive.Count -gt 0) {
     else { foreach ($p in $alive) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue } }
 }
 
-New-Item -ItemType Directory -Force -Path $workDir, $logDir | Out-Null
+New-Item -ItemType Directory -Force -Path $workDir | Out-Null
 # Замок мёртвого watcher-а снимаем сами: он обновляется каждым проходом, а живого
 # процесса рядом уже нет - иначе новый watcher не подхватит очередь.
 if (Test-Path $lockFile) { Remove-Item $lockFile -Force -ErrorAction SilentlyContinue }
@@ -120,8 +117,7 @@ $argLine = (@($pythonArgs) + @('"' + $watcher + '"', '--root', '"' + $Root + '"'
 if ($Server) { $argLine += ' --server "' + $Server + '"' }
 
 Write-Host "запускаю: $pythonExe $argLine"
-$proc = Start-Process -FilePath $pythonExe -ArgumentList $argLine -WorkingDirectory $Root `
-    -WindowStyle Hidden -RedirectStandardOutput $logFile -RedirectStandardError $errFile -PassThru
+$proc = Start-Process -FilePath $pythonExe -ArgumentList $argLine -WorkingDirectory $Root -PassThru
 
 $payload = [ordered]@{
     pid        = $proc.Id
@@ -129,7 +125,6 @@ $payload = [ordered]@{
     deliver    = $Deliver
     interval_s = $Interval
     server     = $Server
-    log        = $logFile
     root       = $Root
 } | ConvertTo-Json
 [System.IO.File]::WriteAllText($pidFile, $payload, (New-Object System.Text.UTF8Encoding($false)))
@@ -143,15 +138,9 @@ for ($i = 0; $i -lt 24; $i++) {
 if ($held) {
     Write-Host "[ok] watcher работает: pid $($proc.Id), режим $Deliver, пауза $intervalText с"
     Write-Host "     сервер: $Server"
-    Write-Host "     лог: $logFile (ошибки: $errFile)"
     Write-Host "     pid-файл: $pidFile"
     Write-Host '     остановка: scripts\stop-watcher.ps1'
     exit 0
 }
-Write-Host '[FAIL] watcher не взял замок очереди: смотрите лог'
-foreach ($f in @($errFile, $logFile)) {
-    if (Test-Path $f) { Write-Host "--- $f"; Get-Content $f -Tail 20 -Encoding UTF8 }
-}
+Write-Host '[FAIL] watcher не взял замок очереди: причина - в окне watcher-а'
 exit 1
-
-$scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent (Resolve-Path $PSCommandPath).Path }

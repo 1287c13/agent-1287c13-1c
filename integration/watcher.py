@@ -67,12 +67,7 @@ def drop_work_dir(path):
     shutil.rmtree(path, ignore_errors=True)
 
 
-def report(quiet, text):
-    if not quiet:
-        print(text)
-
-
-def handle_task(client, cfg, task, mode, root, allow_gui=True, quiet=False):
+def handle_task(client, cfg, task, mode, root, allow_gui=True):
     task_id = task['id']
     agent_id = agent_name(cfg)
     work = task_work_dir(root, task_id)
@@ -84,8 +79,8 @@ def handle_task(client, cfg, task, mode, root, allow_gui=True, quiet=False):
                               attempts=3,
                               cline_data=None,
                               cline_work_dir=agent.cline_work_dir(root))
-    report(quiet, 'задача %s: доставка %s (%s)' % (task_id, delivery.get('status'),
-                                                   delivery.get('message') or ''))
+    print('задача %s: доставка %s (%s)' % (task_id, delivery.get('status'),
+                                           delivery.get('message') or ''))
 
     if delivery.get('status') != 'delivered':
         client.result(task_id, agent_id, 'error', '', {'delivery': delivery.get('mode') or mode},
@@ -109,11 +104,11 @@ def handle_task(client, cfg, task, mode, root, allow_gui=True, quiet=False):
         drop_work_dir(work)
         return {'task_id': task_id, 'state': 'done', 'message': 'echo'}
 
-    return wait_for_result(client, cfg, task, work, fields, quiet)
+    return wait_for_result(client, cfg, task, work, fields)
 
 
 
-def wait_for_result(client, cfg, task, work, fields, quiet=False):
+def wait_for_result(client, cfg, task, work, fields):
     task_id = task['id']
     agent_id = agent_name(cfg)
     answer_path = os.path.join(work, 'answer.md')
@@ -125,7 +120,7 @@ def wait_for_result(client, cfg, task, work, fields, quiet=False):
         try:
             current = client.status(task_id)
         except ClientError as exc:
-            report(quiet, 'состояние задачи %s не прочитано: %s' % (task_id, exc))
+            print('состояние задачи %s не прочитано: %s' % (task_id, exc))
         if current and current.get('state') in ('done', 'error', 'failed', 'timeout'):
             drop_work_dir(work)
             return {'task_id': task_id, 'state': current.get('state'),
@@ -134,23 +129,23 @@ def wait_for_result(client, cfg, task, work, fields, quiet=False):
             try:
                 client.progress(task_id, agent_id, 'running', 'агент выполняет задачу')
             except ClientError as exc:
-                report(quiet, 'стадия running не отправлена: %s' % exc)
+                print('стадия running не отправлена: %s' % exc)
             last_touch = time.time()
         time.sleep(5.0)
 
-    report(quiet, 'задача %s: результат не записан за %d с, файл ответа %s'
-           % (task_id, limit, answer_path))
+    print('задача %s: результат не записан за %d с, файл ответа %s'
+          % (task_id, limit, answer_path))
     return {'task_id': task_id, 'state': 'waiting', 'message': 'результат не записан'}
 
 
-def run_once(client, cfg, mode, root, allow_gui=True, quiet=False):
+def run_once(client, cfg, mode, root, allow_gui=True):
     agent_id = agent_name(cfg)
     claimed = client.claim(agent_id, (cfg.get('agent') or {}).get('claim_ttl_s'))
     task = claimed.get('task')
     if not task:
         return False
-    result = handle_task(client, cfg, task, mode, root, allow_gui=allow_gui, quiet=quiet)
-    report(quiet, 'задача %s: %s' % (task['id'], result.get('state')))
+    result = handle_task(client, cfg, task, mode, root, allow_gui=allow_gui)
+    print('задача %s: %s' % (task['id'], result.get('state')))
     return True
 
 
@@ -165,7 +160,6 @@ def parse_args(argv=None):
     parser.add_argument('--key', default=None, help='ключ агента (agent.key)')
     parser.add_argument('--agent', default=None, help='имя агента (agent.name)')
     parser.add_argument('--run', action='store_true', help='работать циклом, а не одним проходом')
-    parser.add_argument('--once', action='store_true', help='один проход и выход')
     parser.add_argument('--deliver', default=None,
                         choices=('uri', 'manual', 'echo', 'auto'),
                         help='режим доставки: uri (по умолчанию), manual, echo')
@@ -173,7 +167,6 @@ def parse_args(argv=None):
     parser.add_argument('--idle-interval', type=float, default=0,
                         help='пауза, когда очередь пуста, с')
     parser.add_argument('--no-gui', action='store_true', help='не открывать URI (проверка)')
-    parser.add_argument('--quiet', action='store_true', help='печатать только смену стадий')
     return parser.parse_args(argv)
 
 
@@ -200,7 +193,7 @@ def main(argv=None):
     allow_gui = not args.no_gui
 
     if not args.run:
-        worked = run_once(client, cfg, mode, root, allow_gui=allow_gui, quiet=args.quiet)
+        worked = run_once(client, cfg, mode, root, allow_gui=allow_gui)
         if not worked:
             print('очередь пуста: задач нет')
         return 0
@@ -218,8 +211,7 @@ def main(argv=None):
     try:
         while True:
             try:
-                worked = run_once(client, cfg, mode, root, allow_gui=allow_gui,
-                                  quiet=args.quiet)
+                worked = run_once(client, cfg, mode, root, allow_gui=allow_gui)
                 lock.touch()
             except ClientError as exc:
                 print('%s сервер недоступен: %s' % (time.strftime('%H:%M:%S'), exc))

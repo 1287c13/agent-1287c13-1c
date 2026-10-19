@@ -65,7 +65,6 @@
 | `outbox\result_<id>.json` | итог задачи - его читает страница и внешний клиент |
 | `failed\rejected_<id>.json` | задача, отклонённая проверкой формы, с причиной |
 | `agents\<имя>.json` | отметка живого агента: кто, когда, какую задачу ведёт |
-| `events.jsonl` | журнал событий очереди: `task_created`, `claimed`, `progress`, `finished`, `reclaimed` |
 
 На машине агента каталога очереди нет. Есть только `temp\queue\<id>\prompt.txt`
 (формулировка для Cline) и `temp\queue\<id>\answer.md` (файл ответа). После записи
@@ -171,7 +170,6 @@ claim, но историю не переписывает. `claim` истекае
 | `GET /api/history?limit=20` | последние задачи и счётчики |
 | `GET /api/answer/<id>?format=md` | ответ задачи: markdown (`md`) или страница (`html`) |
 | `GET /api/agents` | отметки агентов: кто жив, какую задачу ведёт |
-| `GET /api/events?limit=50` | последние события очереди |
 | `POST /api/agent/claim` | агент берёт задачу: `{"agent": "...", "ttl_s": 300}` |
 | `POST /api/agent/progress` | стадия: `{"id": "...", "stage": "delivered", "message": "..."}` |
 | `POST /api/agent/result` | итог: `{"id": "...", "status": "done", "answer": "..."}` |
@@ -304,13 +302,13 @@ location /agent/ {
 ```
 py -3 integration\agent.py --health
 py -3 integration\agent.py --list
-py -3 integration\watcher.py --once --deliver echo
+py -3 integration\watcher.py --deliver echo
 py -3 integration\transport\http_server.py --port 8760
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-harness.ps1
 ```
 
 `--health` показывает счётчики очереди и живых агентов, `--list` - последние задачи,
-`--once --deliver echo` прогоняет цепочку «claim -> доставка -> результат» без Cline.
+`--deliver echo` прогоняет цепочку «claim -> доставка -> результат» без Cline.
 
 Ограничения, которые нужно называть вслух:
 

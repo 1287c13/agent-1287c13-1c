@@ -1,5 +1,3 @@
-import contextlib
-import errno
 import json
 import os
 import random
@@ -12,8 +10,6 @@ DEFAULT_TIMEOUT_S = 1800
 DEFAULT_CLAIM_TTL_S = 300
 MAX_ATTEMPTS = 3
 MAX_PROGRESS = 50
-LOCK_TIMEOUT_S = 10.0
-LOCK_STALE_S = 120.0
 
 STAGE_ORDER = {'queued': 0, 'claimed': 1, 'delivered': 2, 'running': 3}
 TERMINAL = ('done', 'error', 'failed', 'timeout')
@@ -29,10 +25,6 @@ HINTS = {
     'failed': 'задача не выполнена',
     'timeout': 'истекло время ожидания результата',
 }
-
-
-class QueueError(Exception):
-    pass
 
 
 def now_iso(moment=None):
@@ -88,49 +80,6 @@ def write_text_atomic(path, text):
     os.replace(tmp, path)
 
 
-@contextlib.contextmanager
-def file_lock(path, timeout=LOCK_TIMEOUT_S, stale=LOCK_STALE_S):
-    deadline = time.time() + timeout
-    fd = None
-    while True:
-        try:
-            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            break
-        except OSError as exc:
-            if exc.errno != errno.EEXIST:
-                raise
-            try:
-                if time.time() - os.path.getmtime(path) > stale:
-                    os.remove(path)
-                    continue
-            except OSError:
-                pass
-            if time.time() > deadline:
-                raise QueueError('не удалось взять блокировку %s за %.0f с' % (path, timeout))
-            time.sleep(0.05)
-    try:
-        os.write(fd, str(os.getpid()).encode('ascii'))
-        yield
-    finally:
-        os.close(fd)
-        try:
-            os.remove(path)
-        except OSError:
-            pass
-
-
-def append_line(path, payload):
-    folder = os.path.dirname(path)
-    if folder and not os.path.isdir(folder):
-        os.makedirs(folder)
-    line = json.dumps(payload, ensure_ascii=False) + '\n'
-    with file_lock(path + '.lock'):
-        with open(path, 'a', encoding='utf-8', newline='\n') as f:
-            f.write(line)
-            f.flush()
-            os.fsync(f.fileno())
-
-
 def safe_name(name):
     clean = re.sub(r'[^A-Za-z0-9_.@-]+', '_', (name or 'agent').strip())
     return clean.strip('._')[:80] or 'agent'
@@ -148,7 +97,6 @@ class QueueStore(object):
         self.base = os.path.abspath(base)
         self.dirs = {name: os.path.join(self.base, name) for name in
                      ('inbox', 'processing', 'archive', 'outbox', 'failed', 'agents')}
-        self.events = os.path.join(self.base, 'events.jsonl')
 
 
     def ensure(self):
@@ -163,22 +111,6 @@ class QueueStore(object):
 
     def result_path(self, task_id):
         return os.path.join(self.dirs['outbox'], 'result_%s.json' % task_id)
-
-    def rel(self, path):
-        try:
-            return os.path.relpath(path, self.base)
-        except ValueError:
-            return path
-
-    def event(self, kind, **fields):
-        try:
-            self.ensure()
-            record = {'event': kind, 'at': now_iso(), 'ts': round(time.time(), 3)}
-            record.update(fields)
-            append_line(self.events, record)
-        except (OSError, QueueError, ValueError):
-            pass
-
 
     def _locate(self, task_id):
         if not task_id:
@@ -219,6 +151,7 @@ class QueueStore(object):
     def _touch_claim(self, task, ttl_s=None):
         ttl = int(ttl_s or task.get('claim_ttl_s') or DEFAULT_CLAIM_TTL_S)
         task['claim_ttl_s'] = ttl
+        task['claim_expires_ts'] = round(time.time() + ttl, 3)
 
 
     def enqueue(self, task):
@@ -230,8 +163,6 @@ class QueueStore(object):
         task['attempts'] = int(task.get('attempts') or 0)
         self._remember(task, 'queued', 'задача поставлена в очередь')
         write_json_atomic(self.task_path('inbox', task['id']), task)
-        self.event('task_created', task_id=task['id'], client=task.get('client'),
-                   mode=task.get('mode'), db=task.get('db'), source=task.get('source'))
         return task
 
     def reject(self, payload, errors, task_id=None):
@@ -240,8 +171,6 @@ class QueueStore(object):
         path = os.path.join(self.dirs['failed'], 'rejected_%s.json' % task_id)
         write_json_atomic(path, {'task': payload, 'errors': list(errors),
                                  'rejected_at': now_iso()})
-        self.event('rejected', task_id=task_id, errors=list(errors),
-                   client=(payload or {}).get('client') if isinstance(payload, dict) else None)
         return path
 
 
@@ -270,12 +199,11 @@ class QueueStore(object):
                 continue
             try:
                 task = read_json(dst)
-            except (ValueError, OSError) as exc:
+            except (ValueError, OSError):
                 try:
                     os.replace(dst, os.path.join(self.dirs['failed'], name))
                 except OSError:
                     pass
-                self.event('bad_task', file=name, error=str(exc))
                 continue
             task['attempts'] = int(task.get('attempts') or 0) + 1
             task['agent'] = agent
@@ -287,10 +215,8 @@ class QueueStore(object):
             self._remember(task, 'claimed', 'задачу взял агент %s' % agent)
             try:
                 write_json_atomic(dst, task)
-            except OSError as exc:
-                self.event('claim_write_error', task_id=task.get('id'), error=str(exc))
-            self.event('claimed', task_id=task.get('id'), agent=agent,
-                       attempts=task['attempts'])
+            except OSError:
+                pass
             self.touch_agent(agent, {'state': 'busy', 'task_id': task.get('id')})
             return task
         self.touch_agent(agent, {'state': 'idle', 'task_id': None})
@@ -320,8 +246,6 @@ class QueueStore(object):
             write_json_atomic(path, task)
         except OSError as exc:
             return False, 'файл задачи не записан: %s' % exc, task
-        self.event('progress', task_id=task_id, agent=agent, stage=stage,
-                   accepted=accepted, message=preview(message, 200))
         if agent:
             self.touch_agent(agent, {'state': 'busy', 'task_id': task_id})
         if not accepted:
@@ -379,10 +303,8 @@ class QueueStore(object):
         if folder != 'archive':
             try:
                 os.replace(path, archive)
-            except OSError as exc:
-                self.event('archive_error', task_id=task_id, error=str(exc))
-        self.event('finished', task_id=task_id, status=status, agent=result['agent'],
-                   message=preview(message, 200))
+            except OSError:
+                pass
         if result['agent']:
             self.touch_agent(result['agent'], {'state': 'idle', 'task_id': None})
         return result
@@ -420,10 +342,8 @@ class QueueStore(object):
             try:
                 write_json_atomic(path, task)
                 os.replace(path, self.task_path('inbox', task_id))
-            except OSError as exc:
-                self.event('reclaim_error', task_id=task_id, error=str(exc))
+            except OSError:
                 continue
-            self.event('reclaimed', task_id=task_id, agent=agent)
             actions.append({'task_id': task_id, 'action': 'requeued'})
         return actions
 
@@ -610,21 +530,3 @@ class QueueStore(object):
             items.append(data)
         items.sort(key=lambda row: row.get('name') or '')
         return items
-
-
-    def events_tail(self, limit=50):
-        if not os.path.isfile(self.events):
-            return []
-        rows = []
-        with open(self.events, 'r', encoding='utf-8', errors='replace') as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rows.append(json.loads(line))
-                except ValueError:
-                    continue
-        return rows[-max(1, limit):]
-
-        task['claim_expires_ts'] = round(time.time() + ttl, 3)
