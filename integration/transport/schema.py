@@ -12,7 +12,6 @@ enum, items. Полная реализация спецификации не н�
 """
 
 import json
-import os
 import re
 
 TYPES = {
@@ -89,8 +88,3 @@ def validate(instance, schema, where=''):
             for index, value in enumerate(instance):
                 errors.extend(validate(value, item_schema, '%s[%d]' % (where or 'элемент', index)))
     return errors
-
-
-def schema_path(root, name):
-    """Путь к файлу схемы по имени: task_schema.json, result_schema.json."""
-    return os.path.join(root, 'integration', 'schemas', name)

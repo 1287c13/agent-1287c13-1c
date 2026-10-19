@@ -327,9 +327,13 @@ else { Bad 'нет каталога skills-vendor - выполните scripts\i
 # --- 14. Внешняя интеграция (очередь задач) -----------------------------------
 Head 'Внешняя интеграция (очередь задач)'
 $layerFiles = @('integration\agent.py', 'integration\watcher.py', 'integration\bridge.py',
-    'integration\passenger_wsgi.py', 'integration\transport\store.py',
+    'integration\passenger_wsgi.py', 'integration\task.py', 'integration\md_to_html.py',
+    'integration\transport\__init__.py', 'integration\transport\store.py',
     'integration\transport\api.py', 'integration\transport\config.py',
+    'integration\transport\schema.py', 'integration\transport\cline.py',
     'integration\transport\client.py', 'integration\transport\wsgi.py',
+    'integration\transport\http_server.py',
+    'integration\schemas\task_schema.json', 'integration\schemas\result_schema.json',
     'integration\web\index.html', 'integration\web\app.js', 'integration\web\style.css',
     'deploy\install-local.ps1', 'deploy\config.example.json',
     'scripts\start-watcher.ps1', 'scripts\stop-watcher.ps1')

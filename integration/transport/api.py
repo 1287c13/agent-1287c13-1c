@@ -373,8 +373,3 @@ class Api(object):
             return self.reclaim()
         return self._json(404, {'error': 'неизвестный маршрут',
                                 'path': clean, 'method': method})
-
-
-def make_api(root=None, config=None, config_path=None):
-    """Собрать Api один раз на процесс."""
-    return Api(root=root, config=config, config_path=config_path)

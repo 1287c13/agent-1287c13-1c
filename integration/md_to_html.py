@@ -2,17 +2,16 @@
 """Ответ агента в HTML: markdown-файл ответа превращается в страницу.
 
 Правило разделения: агент всегда пишет ответ файлом markdown
-(`queue\\answers\\answer_<id>.md`) - формат, который читается человеком и правится
+(`temp\\queue\\<id>\\answer.md`) - формат, который читается человеком и правится
 руками. HTML получается по требованию: кнопка «Скачать ответ (HTML)» в окне задач,
-маршрут `GET /api/answer/<id>?format=html` на сервере очереди и ключ
-`--render-answer` у `integration\\agent.py`. Конвертер свой: внешних markdown-библиотек
+маршрут `GET /api/answer/<id>?format=html` на сервере очереди и ключи
+`--answer --html` у `integration\\agent.py`. Конвертер свой: внешних markdown-библиотек
 в окружении нет, а набор конструкций ответа фиксирован - заголовки, списки, таблицы,
 блоки кода, цитаты, выделения и ссылки. Неразобранный текст остаётся абзацем, то есть
 конвертер ничего не теряет.
 """
 
 import html
-import os
 import re
 
 PAGE = """<!DOCTYPE html>
@@ -189,13 +188,3 @@ def render(markdown, title='Ответ задачи', source=''):
 def answer_file_name(task_id, kind='html'):
     """Имя файла ответа для скачивания: по нему видно задачу."""
     return 'answer_%s.%s' % (task_id or 'task', kind)
-
-
-def write_file(path, markdown, title='Ответ задачи', source=''):
-    """Записать страницу по пути: каталог создаётся при необходимости."""
-    folder = os.path.dirname(os.path.abspath(path))
-    if folder and not os.path.isdir(folder):
-        os.makedirs(folder)
-    with open(path, 'w', encoding='utf-8', newline='\n') as f:
-        f.write(render(markdown, title, source))
-    return path

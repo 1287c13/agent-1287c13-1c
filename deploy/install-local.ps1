@@ -44,11 +44,17 @@ if (-not (Test-Python)) {
 Write-Host 'python: ok'
 
 $required = @(
-    'integration\agent.py', 'integration\watcher.py', 'integration\bridge.py',
-    'integration\passenger_wsgi.py', 'integration\transport\api.py',
-    'integration\transport\wsgi.py', 'integration\transport\store.py',
-    'integration\transport\config.py', 'integration\transport\client.py',
-    'integration\web\index.html', 'integration\web\app.js', 'integration\web\style.css'
+    # серверная часть: без неё Passenger не поднимется (http_server.py - только локальная проверка)
+    'integration\passenger_wsgi.py', 'integration\task.py', 'integration\md_to_html.py',
+    'integration\transport\__init__.py', 'integration\transport\wsgi.py',
+    'integration\transport\api.py', 'integration\transport\store.py',
+    'integration\transport\config.py', 'integration\transport\schema.py',
+    'integration\transport\http_server.py',
+    'integration\schemas\task_schema.json', 'integration\schemas\result_schema.json',
+    'integration\web\index.html', 'integration\web\app.js', 'integration\web\style.css',
+    # машина агента: watcher забирает задачу, agent.py пишет результат
+    'integration\watcher.py', 'integration\bridge.py', 'integration\agent.py',
+    'integration\transport\client.py', 'integration\transport\cline.py'
 )
 $missing = @($required | Where-Object { -not (Test-Path (Join-Path $Root $_)) })
 if ($missing.Count -gt 0) {

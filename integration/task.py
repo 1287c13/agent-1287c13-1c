@@ -216,19 +216,6 @@ def resolve_db(root, value):
     return None, 'базы "%s" нет в %s' % (probe, DBS_FILE)
 
 
-def database_choices(root):
-    """Записи баз для формы: label (что видно), value (id для задачи), path."""
-    choices = []
-    for entry in load_databases(root):
-        value = entry.get('id') or entry.get('name') or ''
-        name = entry.get('name') or ''
-        label = value if (not name or name == value) else '%s - %s' % (value, name)
-        choices.append({'label': label, 'value': value,
-                        'path': entry.get('path') or entry.get('ref') or
-                                entry.get('server') or ''})
-    return choices
-
-
 def errors_to_text(task, errors):
     """Сообщение о непринятой задаче - одной строкой, с идентификатором."""
     return 'задача %s отклонена: %s' % ((task or {}).get('id', '?'), format_errors(errors))

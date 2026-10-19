@@ -28,12 +28,15 @@
 | `integration\transport\config.py` | `deploy\config.json`: секции `server` и `agent`, ключи клиентов |
 | `integration\transport\api.py` | логика HTTP-интерфейса: задачи, стадии, ответы, агенты, статика страницы |
 | `integration\transport\client.py` | HTTP-клиент агента и командной строки |
+| `integration\transport\cline.py` | подтверждение доставки по журналу сессий Cline (`sessions.db`), а не по ответу оболочки Windows |
 | `integration\transport\wsgi.py` | WSGI-приложение для хостинга (Passenger и подобные) и `SCRIPT_NAME` |
-| `integration\transport\http_server.py` | локальный сервер на `wsgiref` для проверки без хостинга |
+| `integration\transport\http_server.py` | локальный сервер на `wsgiref` для проверки без хостинга (на хостинге не участвует) |
+| `integration\transport\__init__.py` | пакет транспорта: общее описание модулей, без кода |
 | `integration\passenger_wsgi.py` | точка входа Passenger: база URI и читаемая ошибка импорта |
 | `integration\watcher.py` | watcher: claim с сервера, доставка в Cline, ожидание результата |
 | `integration\bridge.py` | мост к Cline: URI-протокол VS Code, ручной режим, echo |
 | `integration\agent.py` | командная строка: постановка задачи, запись результата, состояние, ответ |
+| `integration\md_to_html.py` | ответ markdown в HTML: `GET /api/answer/<id>?format=html` и скачивание страницы |
 | `integration\web\index.html`, `app.js`, `style.css` | страница задач: вход по ключу, форма, стадии, история |
 | `integration\schemas\task_schema.json` | схема задачи - контракт отправителя |
 | `integration\schemas\result_schema.json` | схема результата - контракт читателя |
@@ -41,6 +44,14 @@
 | `deploy\install-local.ps1` | локальная установка: python, файлы слоя, `config.json`, ярлык watcher-а |
 | `deploy\run-server.bat`, `run-watcher.bat`, `run-agent.bat` | обёртки запуска (watcher удобнее поднимать скриптом `scripts\start-watcher.ps1`: он работает фоном) |
 | `deploy\config.example.json` | образец настроек; копия `deploy\config.json` в git не хранится |
+
+Разделение по машинам важно: на веб-сервере исполняется только серверная часть
+(`passenger_wsgi.py`, `transport\wsgi.py`, `transport\api.py`, `transport\store.py`,
+`transport\config.py`, `transport\schema.py`, `task.py`, `md_to_html.py`, `web\`,
+`schemas\`). `watcher.py`, `bridge.py`, `transport\cline.py`, `agent.py` и
+`transport\client.py` работают на машине агента: Cline, MCP-серверы и база 1С на
+хостинге не запускаются. `transport\http_server.py` нужен только для локальной
+проверки серверной части без Passenger.
 
 ## 3. Где живёт очередь
 
