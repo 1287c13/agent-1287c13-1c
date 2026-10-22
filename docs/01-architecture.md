@@ -98,7 +98,7 @@ Cline (VS Code)
 ├── queue/                         очередь задач на сервере: inbox, processing, archive, outbox,
 │                                  failed, agents (в git не хранится;
 │                                  устройство - docs\07-external-integration.md)
-├── scripts/                       install / start / check / publish + start-toolkit / stop-toolkit / vanessa-run / new-analysis
+├── scripts/                       install / start / check / publish + start-toolkit / stop-toolkit / vanessa-run / new-analysis / set-cline-mcp-path
 ├── temp/                          временные файлы задач, включая сценарии .feature (в git не хранится)
 └── skills-vendor/                 вендорские репозитории (в git не хранятся)
 ```

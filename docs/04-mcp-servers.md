@@ -12,9 +12,10 @@ Cline читает MCP только из глобального файла. Це
 3. `CLINE_DIR\data\settings\cline_mcp_settings.json`;
 4. `~\.cline\data\settings\cline_mcp_settings.json`.
 
-`enable-mcp.ps1` выставляет `CLINE_MCP_SETTINGS_PATH` на
-`<проект>\.cline\cline_mcp_settings.json`. Перезапуск VS Code обязателен -
-переменная читается при старте.
+`scripts\set-cline-mcp-path.ps1` наводит `CLINE_MCP_SETTINGS_PATH` на
+`<проект>\.cline\cline_mcp_settings.json`; тот же скрипт - короткая команда
+**"измени переменную"**, если харнесс открыт в другом каталоге. `enable-mcp.ps1` вызывает
+его в составе установки. Перезапуск VS Code обязателен - переменная читается при старте.
 
 Форматов транспорта, которые понимает Cline, три: `stdio`, `sse`, `streamableHttp`
 (синонимы `http` и `streamable-http` тоже принимаются). Подтверждено по
@@ -66,6 +67,7 @@ Cline читает MCP только из глобального файла. Це
 
 MCP-сервер только читает индекс; индексацию ведёт отдельный демон. Если демон не
 запущен, любой вызов вернёт `daemon_offline`. Демон поднимает
+`scripts/start-harness.ps1 -Layer Index` (только индекс, без живого слоя), оба слоя -
 `scripts/start-harness.ps1`.
 
 Инструменты: `get_object_structure`, `get_object_profile`, `get_form_handlers`,
@@ -76,13 +78,13 @@ MCP-сервер только читает индекс; индексацию в
 `get_stats`, `health`.
 
 Репозиторий задаётся алиасом: в вызове передаётся `repo: "main"`. Алиасы видны в
-`daemon.toml` и в выводе `scripts\check-harness.ps1` (вместе со статусами путей из
+`daemon.toml` и в выводе `scripts\check-harness.ps1 -Health` (вместе со статусами путей из
 `/health` демона).
 
 `get_stats` - самый дорогой инструмент сервера: он считает статистику по базе индекса
 (замер: 9,0 с по корню проекта, 6,6 с по выгрузке КА) и без параметра `repo` обходит все
 репозитории сразу. Для вопроса «какие репозитории есть и жив ли индекс» он не нужен:
-список даёт `daemon.toml`, состояния - `/health` демона (`scripts\check-harness.ps1`).
+список даёт `daemon.toml`, состояния - `/health` демона (`scripts\check-harness.ps1 -Health`).
 
 ## 3. `1c-platform-help` - справка API платформы
 
@@ -130,11 +132,16 @@ Reжимы поиска: `keyword` (по умолчанию, без внешни
 ## Проверка подключения
 
 ```powershell
+# установка: артефакты, конфиги, переменная Cline (порты не опрашиваются)
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-harness.ps1
+
+# живость слоев - по явному указанию: порт 8015 демона и порт 6003 toolkit
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-harness.ps1 -Health
 ```
 
-Ожидаемое: три артефакта на месте, индексатор отвечает, порт 6003 отвечает.
-В Cline список инструментов виден в панели MCP Servers.
+Ожидаемое: три артефакта на месте, переменная указывает на проект; с ключом `-Health` -
+демон индекса в `ready` и сервер 6003 отвечает. В Cline список инструментов виден в панели
+MCP Servers.
 
 ## Ручная переустановка
 

@@ -3,11 +3,16 @@
 Первым делом:
 
 ```powershell
+# установка: что есть на диске и чего не хватает
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-harness.ps1
+
+# пробы живости слоев: порты 8015 и 6003, клиентские сеансы 1С
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-harness.ps1 -Health
 ```
 
 Скрипт печатает `[ok]` / `[warn]` / `[FAIL]` по каждому пункту и возвращает код 1,
-если что-то требует действия.
+если что-то требует действия. Без ключа `-Health` он не трогает ни порты, ни сеансы:
+живость слоя проверяют под задачу или по просьбе, а не «на всякий случай».
 
 ---
 
@@ -24,8 +29,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-harness.ps1
 ```
 Должен вернуть `<проект>\.cline\cline_mcp_settings.json`.
 
-**Лечение:** выполнить `scripts\enable-mcp.ps1`, затем **полностью** закрыть
-VS Code (все окна) и открыть заново.
+**Лечение:** сказать агенту **"измени переменную"** - `scripts\set-cline-mcp-path.ps1`
+наводит переменную на `.cline\cline_mcp_settings.json` этого каталога, - затем **полностью**
+закрыть VS Code (все окна) и открыть заново. Полная перенастройка MCP (индексатор плюс
+переменная) - `scripts\enable-mcp.ps1`.
 
 ### Сервер `1c-code-index` не поднимается
 
@@ -34,7 +41,7 @@ VS Code (все окна) и открыть заново.
 **Причина:** не запущен фоновый индексатор, либо у сервера и демона разные
 `CODE_INDEX_HOME`.
 
-**Лечение:** `scripts\start-harness.ps1`. Проверка:
+**Лечение:** `scripts\start-harness.ps1 -Layer Index` (только демон, без живого слоя). Проверка:
 ```powershell
 $env:CODE_INDEX_HOME = "C:\_works\1c-ai\agent\.cline\mcp\code-index-mcp\home"
 & "C:\_works\1c-ai\agent\.cline\mcp\code-index-mcp\bsl-indexer.exe" daemon status
@@ -47,9 +54,9 @@ $env:CODE_INDEX_HOME = "C:\_works\1c-ai\agent\.cline\mcp\code-index-mcp\home"
 
 **Чем не проверять живость.** `get_stats` - не признак живого демона: он читает
 `.code-index\index.db` напрямую и считает статистику около 9 с на репозиторий (а без
-параметра `repo` - по всем репозиториям сразу). Список репозиториев и их состояния
-показывает `scripts\check-harness.ps1`: алиасы - из `daemon.toml`, статусы - из
-`GET http://127.0.0.1:8015/health` (0,05 с).
+параметра `repo` - по всем репозиториям сразу). Список репозиториев даёт `daemon.toml`,
+а их состояния - `scripts\check-harness.ps1 -Health`: статусы из
+`GET http://127.0.0.1:8015/health` (0,05 с). Без ключа `-Health` чекер порт не опрашивает.
 
 **`serve` - это ещё не демон.** `bsl-indexer.exe serve` (его запускает Cline по stdio)
 читает индекс сам, а инструменты данных спрашивают демон (`http://127.0.0.1:8015`): без
@@ -61,7 +68,7 @@ $env:CODE_INDEX_HOME = "C:\_works\1c-ai\agent\.cline\mcp\code-index-mcp\home"
 
 ### Живая база: порт 6003 не отвечает
 
-**Симптом:** инструменты `1c-toolkit` недоступны, `check-harness.ps1` пишет
+**Симптом:** инструменты `1c-toolkit` недоступны, `check-harness.ps1 -Health` пишет
 `[warn] порт 6003 не отвечает`.
 
 **Лечение:** поднять сеанс toolkit скриптом (база берётся из `.v8-project.json`):

@@ -89,15 +89,17 @@ if (-not $SkipIndexer -and (Test-Path $indexerExe)) {
 }
 
 # --- 3. Переменная окружения для Cline --------------------------------------
+# Одна реализация на две команды: "измени переменную" (scripts\set-cline-mcp-path.ps1)
+# и полная перенастройка MCP (этот скрипт). Логика установки переменной - там.
 if (-not $SkipEnvVar) {
-    $current = [Environment]::GetEnvironmentVariable('CLINE_MCP_SETTINGS_PATH', 'User')
-    if ($current -eq $settingsPath) {
-        Write-Host '[=] CLINE_MCP_SETTINGS_PATH уже указывает на проект'
+    $setPath = Join-Path $Root 'scripts\set-cline-mcp-path.ps1'
+    if (Test-Path $setPath) {
+        # Отдельный процесс: скрипт команды завершается exit-кодом, а exit в дочернем
+        # скрипте, вызванном через &, завершил бы и этот - вместе с итоговыми строками.
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $setPath -Root $Root
+        if ($LASTEXITCODE -ne 0) { Write-Warning 'переменная CLINE_MCP_SETTINGS_PATH не выставлена - см. сообщение выше' }
     }
-    else {
-        [Environment]::SetEnvironmentVariable('CLINE_MCP_SETTINGS_PATH', $settingsPath, 'User')
-        Write-Host "[+] CLINE_MCP_SETTINGS_PATH = $settingsPath (уровень пользователя)"
-    }
+    else { Write-Warning "нет $setPath - переменная CLINE_MCP_SETTINGS_PATH не выставлена" }
 }
 
 # --- 4. Итог ----------------------------------------------------------------

@@ -15,7 +15,10 @@
     - обязательные строки .gitignore;
     - сохранение анализа: скрипт scripts\new-analysis.ps1, требования правил (артефакт
       анализа в каталоге analysis, запрет коммита в задачах по базе, отправка правок
-      в origin у задач по харнессу).
+      в origin у задач по харнессу);
+    - команду "измени переменную" (scripts\set-cline-mcp-path.ps1) и флаги чекеров:
+      пробы живости у check-harness.ps1 только с ключом -Health, у start-harness.ps1 -
+      выбор слоя ключом -Layer.
 
 .NOTES
   Ничего не меняет. Код возврата 0 - расхождений нет, 1 - есть.
@@ -368,6 +371,32 @@ foreach ($rc in $ruleChecks) {
     $rcText = Get-Content $rcPath -Raw -Encoding UTF8
     if ($rcText -match $rc.Pattern) { Ok "$(Rel $rcPath): $($rc.Hint)" }
     else { Bad "$(Rel $rcPath): нет - $($rc.Hint)" }
+}
+
+# --- 9. Команда "измени переменную" и флаги чекеров ---------------------------
+Head 'Команда "измени переменную" и флаги чекеров'
+$commandChecks = @(
+    @{ File = 'scripts\set-cline-mcp-path.ps1'; Pattern = 'CLINE_MCP_SETTINGS_PATH';
+       Hint = 'скрипт команды: наводит переменную Cline на текущий каталог' },
+    @{ File = 'scripts\check-harness.ps1';     Pattern = '\[switch\]\s*\$Health';
+       Hint = 'check-harness: пробы живости только с ключом -Health' },
+    @{ File = 'scripts\start-harness.ps1';     Pattern = "ValidateSet\(\s*'All',\s*'Index',\s*'Toolkit'\s*\)";
+       Hint = 'start-harness: подъем слоя ключом -Layer' },
+    @{ File = '.clinerules\00-contract.md';    Pattern = 'измени переменную';
+       Hint = 'правило: команда разобрана (короткий формат 1.3)' },
+    @{ File = 'START.md';                      Pattern = 'измени переменную';
+       Hint = 'START.md: команда названа в протоколе' },
+    @{ File = 'README.md';                     Pattern = 'измени переменную';
+       Hint = 'README.md: команда описана человеку' },
+    @{ File = 'docs\06-troubleshooting.md';    Pattern = 'измени переменную';
+       Hint = 'docs\06-troubleshooting.md: команда в лечении "Cline не видит MCP"' }
+)
+foreach ($cc in $commandChecks) {
+    $ccPath = Join-Path $Root $cc.File
+    if (-not (Test-Path $ccPath)) { Bad "нет $(Rel $ccPath) - проверить нечего ($($cc.Hint))" ; continue }
+    $ccText = Get-Content $ccPath -Raw -Encoding UTF8
+    if ($ccText -match $cc.Pattern) { Ok "$(Rel $ccPath): $($cc.Hint)" }
+    else { Bad "$(Rel $ccPath): нет - $($cc.Hint)" }
 }
 
 Head 'Итог'

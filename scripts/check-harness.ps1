@@ -4,27 +4,31 @@
   Диагностика харнесса: что установлено, что запущено, чего не хватает.
 
 .DESCRIPTION
-  Проверяет:
+  Проверяет без сети и без запуска платформы:
     - переменную CLINE_MCP_SETTINGS_PATH и наличие .cline\cline_mcp_settings.json;
     - артефакты MCP-серверов внутри проекта;
-    - фон индексатора кода и доступность его MCP-сервера;
-    - порт 6003 встроенного сервера 1C MCP Toolkit;
-    - .v8-project.json и существование баз из него;
-    - платформы 1С и наличие файлов справки shcntx_ru.hbk;
+    - установку индексатора кода и конфиг его демона (daemon.toml, индекс);
+    - .v8-project.json, существование баз из него, платформы и файлов справки shcntx_ru.hbk;
     - прогон Gherkin/Vanessa (по требованию задачи): обработка, сценарии, VAParams;
     - учётные данные баз (user/password) для подключения и прогона;
-    - занятость клиентских сеансов 1С (лицензия на клиентов);
     - каталог результатов анализа (analysis) и последний разбор;
     - внешнюю интеграцию: файлы слоя, настройки, состояние очереди задач;
     - git: незакоммиченные изменения и неотправленные коммиты (origin);
     - развёрнутость вендорских репозиториев (skills-vendor).
+
+  Пробы живости - порт 8015 демона индекса, порт 6003 встроенного сервера
+  1C MCP Toolkit и занятость клиентских сеансов 1С - выполняются ТОЛЬКО с ключом
+  -Health. Без ключа чекер не трогает ни один порт и ни одного сеанса: проверка
+  живости нужна задаче, а не ритуалу, и запускается по явному указанию.
 
 .NOTES
   Ничего не меняет. Код возврата 0 - всё в порядке, 1 - есть замечания.
 #>
 [CmdletBinding()]
 param(
-    [string] $Root
+    [string] $Root,
+    # Пробы живости (порты 8015 и 6003, клиентские сеансы 1С) - только по явному указанию.
+    [switch] $Health
 )
 
 $ErrorActionPreference = 'Continue'
@@ -115,6 +119,9 @@ function Get-JsSourceProblem {
 
 
 Write-Host "Харнесс: $Root"
+if (-not $Health) {
+    Info 'пробы живости (порты 8015 / 6003, клиентские сеансы 1С) пропущены - выполняются с ключом -Health'
+}
 
 # --- 1. Файл настроек MCP ---------------------------------------------------
 Head 'Конфигурация MCP'
@@ -149,30 +156,34 @@ $indexer = Join-Path $Root '.cline\mcp\code-index-mcp\bsl-indexer.exe'
 $indexHome = Join-Path $Root '.cline\mcp\code-index-mcp\home'
 if (Test-Path $indexer) {
     $env:CODE_INDEX_HOME = $indexHome
-    $st = & $indexer daemon status 2>&1 | Out-String
-    if ($st -match 'ready|индекс|daemon|ok|running|файл') { Ok 'индексатор отвечает' } else { Warn 'индексатор не отвечает - запустите scripts\start-harness.ps1' }
+    if ($Health) {
+        $st = & $indexer daemon status 2>&1 | Out-String
+        if ($st -match 'ready|индекс|daemon|ok|running|файл') { Ok 'индексатор отвечает' } else { Warn 'индексатор не отвечает - запустите scripts\start-harness.ps1 -Layer Index' }
+    }
+    else { Info 'демон не опрашивается (ключ -Health): проверено только наличие файлов и конфига' }
     if (Test-Path (Join-Path $indexHome 'daemon.toml')) { Ok 'daemon.toml на месте' } else { Bad 'нет daemon.toml - выполните enable-mcp.ps1' }
     if (Test-Path (Join-Path $Root '.code-index\index.db')) { Ok 'индекс построен (.code-index\index.db)' } else { Warn 'индекс ещё не построен (идёт первичная индексация?)' }
 
-    # Репозитории индекса: список - из daemon.toml, состояния - из /health демона (8015).
-    # Это дешёвая замена MCP-вызову get_stats: около 0,05 с против ~9 с на репозиторий.
-    # Ради этой строки агент больше не вызывает get_stats ради «какие репо есть».
+    # Репозитории индекса: список - из daemon.toml (это файл, а не проба), состояния -
+    # из /health демона (8015) и только с ключом -Health.
     $daemonCfg = Join-Path $indexHome 'daemon.toml'
     if (Test-Path $daemonCfg) {
         $aliases = @(Select-String -Path $daemonCfg -Pattern '^\s*alias\s*=\s*"([^"]+)"' -Encoding UTF8 | ForEach-Object { $_.Matches[0].Groups[1].Value })
         if ($aliases.Count -gt 0) { Info ('репозитории индекса (daemon.toml): ' + ($aliases -join ', ')) }
         else { Warn 'в daemon.toml не разобрано ни одной секции [[paths]] с alias' }
     }
-    try {
-        $hRaw = Invoke-WebRequest -Uri 'http://127.0.0.1:8015/health' -UseBasicParsing -TimeoutSec 5
-        $hText = [System.Text.Encoding]::UTF8.GetString($hRaw.RawContentStream.ToArray())
-        $h = $hText | ConvertFrom-Json
-        $states = @($h.paths | ForEach-Object { (Split-Path -Leaf $_.path) + ' = ' + $_.status })
-        Ok ('демон индекса: ' + ($states -join '; '))
-        $notReady = @($h.paths | Where-Object { $_.status -ne 'ready' })
-        if ($notReady.Count -gt 0) { Info 'путь не в ready - идёт индексация: инструменты по нему недоступны, надо ждать' }
+    if ($Health) {
+        try {
+            $hRaw = Invoke-WebRequest -Uri 'http://127.0.0.1:8015/health' -UseBasicParsing -TimeoutSec 5
+            $hText = [System.Text.Encoding]::UTF8.GetString($hRaw.RawContentStream.ToArray())
+            $h = $hText | ConvertFrom-Json
+            $states = @($h.paths | ForEach-Object { (Split-Path -Leaf $_.path) + ' = ' + $_.status })
+            Ok ('демон индекса: ' + ($states -join '; '))
+            $notReady = @($h.paths | Where-Object { $_.status -ne 'ready' })
+            if ($notReady.Count -gt 0) { Info 'путь не в ready - идёт индексация: инструменты по нему недоступны, надо ждать' }
+        }
+        catch { Warn 'демон индекса (8015) не отвечает - запустите scripts\start-harness.ps1 -Layer Index' }
     }
-    catch { Warn 'демон индекса (8015) не отвечает - запустите scripts\start-harness.ps1' }
 }
 else {
     Bad 'индексатор не установлен - выполните scripts\install-mcp.ps1'
@@ -180,20 +191,25 @@ else {
 
 # --- 4. Встроенный сервер 1C MCP Toolkit ------------------------------------
 Head 'Живая база (1c-toolkit, порт 6003)'
-try {
-    $r = Invoke-WebRequest 'http://127.0.0.1:6003/health' -UseBasicParsing -TimeoutSec 5
-    Ok "сервер отвечает ($($r.StatusCode))"
+if (-not $Health) {
+    Info 'порт не опрашивается: живой слой проверяется ключом -Health или подъемом слоя под задачу (scripts\start-toolkit.ps1)'
 }
-catch {
-    # Сеанс уже запущен, но сервер ещё не ответил: это не повод поднимать второй сеанс
-    # (лицензия на клиентов базы ограничена, порт 6003 занят).
-    $tk = @(Get-CimInstance Win32_Process -Filter "Name='1cv8.exe' or Name='1cv8c.exe' or Name='1cv8s.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -and ($_.CommandLine -like '*MCP_Toolkit*') })
-    if ($tk.Count -gt 0) {
-        $tkPids = ($tk | ForEach-Object { [string] $_.ProcessId }) -join ', '
-        Warn "порт 6003 не отвечает, но сеанс toolkit уже запущен (PID $tkPids) - второй сеанс не поднимать: scripts\start-toolkit.ps1 ждёт готовности этого"
+else {
+    try {
+        $r = Invoke-WebRequest 'http://127.0.0.1:6003/health' -UseBasicParsing -TimeoutSec 5
+        Ok "сервер отвечает ($($r.StatusCode))"
     }
-    else { Warn 'порт 6003 не отвечает - поднимите сервер: scripts\start-toolkit.ps1 (или scripts\start-harness.ps1)' }
+    catch {
+        # Сеанс уже запущен, но сервер ещё не ответил: это не повод поднимать второй сеанс
+        # (лицензия на клиентов базы ограничена, порт 6003 занят).
+        $tk = @(Get-CimInstance Win32_Process -Filter "Name='1cv8.exe' or Name='1cv8c.exe' or Name='1cv8s.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandLine -and ($_.CommandLine -like '*MCP_Toolkit*') })
+        if ($tk.Count -gt 0) {
+            $tkPids = ($tk | ForEach-Object { [string] $_.ProcessId }) -join ', '
+            Warn "порт 6003 не отвечает, но сеанс toolkit уже запущен (PID $tkPids) - второй сеанс не поднимать: scripts\start-toolkit.ps1 ждёт готовности этого"
+        }
+        else { Warn 'порт 6003 не отвечает - поднимите сервер: scripts\start-toolkit.ps1' }
+    }
 }
 
 # --- 5. Проект 1С -----------------------------------------------------------
@@ -268,9 +284,12 @@ else { Warn '.v8-project.json не найден - проверка учётны�
 
 # --- 9. Клиентские сеансы 1С -------------------------------------------------
 Head 'Клиентские сеансы 1С (лицензия на клиентов)'
-$procs = @(Get-Process -Name '1cv8', '1cv8c', '1cv8s' -ErrorAction SilentlyContinue)
-if ($procs.Count -eq 0) { Ok 'процессов 1С не запущено - базы свободны для прогона' }
-else { Warn "процессов 1С: $($procs.Count) - прогону Vanessa нужны ДВА клиента одной базы; закройте чужие сеансы, включая 1C MCP Toolkit (порт 6003)" }
+if ($Health) {
+    $procs = @(Get-Process -Name '1cv8', '1cv8c', '1cv8s' -ErrorAction SilentlyContinue)
+    if ($procs.Count -eq 0) { Ok 'процессов 1С не запущено - базы свободны для прогона' }
+    else { Warn "процессов 1С: $($procs.Count) - прогону Vanessa нужны ДВА клиента одной базы; закройте чужие сеансы, включая 1C MCP Toolkit (порт 6003)" }
+}
+else { Info 'занятость сеансов не проверяется без ключа -Health (важно только перед прогоном Vanessa)' }
 
 # --- 10. Временные файлы задачи ----------------------------------------------
 Head 'Временные файлы (temp)'
