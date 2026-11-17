@@ -54,6 +54,22 @@ startup-параметры `danger_auto_write=true;danger_auto_priv=true`: `exec
 Оба факта проверены на `demo-ar` 2026-11-17 (разбор -
 `analysis\2026-11-17_1220_podpiska-rasshireniya-prizapisi.md`).
 
+Протокольные детали сеанса (проверено на 1.10.0, 2026-11-17):
+
+- `initialize` отвечает `200` и отдаёт заголовок `mcp-session-id` (сервер пишет его в нижнем
+  регистре - при разборе ответа регистр не важен); без этого заголовка следующий запрос
+  получает `400 Bad Request: Missing session ID`. Порядок: `initialize` ->
+  `notifications/initialized` -> `tools/list` / `tools/call`;
+- `tools/list` на 1.10.0 отдаёт 13 инструментов - те, что в таблице ниже, плюс `get_screenshot`;
+  отключены в конфиге Cline только `submit_for_deanonymization` и `close_1c_session`;
+- REST-зеркало `POST http://127.0.0.1:6003/api/<инструмент>` остаётся запасным путём, когда
+  MCP-клиента под рукой нет. Тело слать **байтами** UTF-8: строка в `-Body` у PowerShell 5.1
+  уходит ASCII, кириллица превращается в `???????` - отсюда ложный вывод «REST не разбирает
+  параметры» (разбор - `analysis\2026-11-13_1537_toolkit-rest-kanal.md`);
+- `restart_1c_session` в native-режиме гасит сеанс **вместе с сервером**: ответ
+  `{"error":"Server shutting down"}`, порт 6003 закрывается, процессов 1С не остаётся.
+  Обратно сеанс не поднимается - нужен `scripts\start-toolkit.ps1`.
+
 Инструменты (имена - по документации вендора; точный перечень отдаёт сам сервер):
 
 | Инструмент | Назначение |
@@ -66,6 +82,7 @@ startup-параметры `danger_auto_write=true;danger_auto_priv=true`: `exec
 | `get_object_by_link` / `get_link_of_object` | навигация по ссылкам |
 | `find_references_to_object` | кто ссылается на объект |
 | `get_bsl_syntax_help` | подсказка по синтаксису BSL |
+| `get_screenshot` | снимок экрана клиента 1С |
 | `restart_1c_session` / `close_1c_session` | управление сессией |
 
 Из дополнительных возможностей: изоляция каналов (`?channel=<id>`), ограничение
