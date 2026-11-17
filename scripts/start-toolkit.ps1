@@ -57,6 +57,16 @@
     поднять новый. Без этого ключа второй сеанс не поднимается: если сервер отвечает -
     скрипт выходит, если сеанс есть, но сервер молчит - скрипт только ждёт.
 
+.PARAMETER AllowWrite
+    Подключить авторазрешение опасных операций: startup-параметры
+    danger_auto_write=true и danger_auto_priv=true. С ними execute_code выполняет
+    код с "Записать" и "УстановитьПривилегированныйРежим" без диалога подтверждения,
+    который иначе жмёт человек в форме обработки.
+
+    Ключи danger_* поддержаны обработкой начиная с версии 1.9.1 (текущий релиз -
+    1.10.0). Старый epf их молча игнорирует: предупреждение печатается, версия
+    проверяется по VERSION.txt рядом с обработкой (его пишет scripts\install-mcp.ps1).
+
 .PARAMETER NoWait
     Не ждать /health: запустить сеанс (если его ещё нет), напечатать PID и выйти.
 
@@ -79,6 +89,7 @@ param(
     [string] $Client = 'Тонкий',
     [int]    $TimeoutSec = 90,
     [switch] $Force,
+    [switch] $AllowWrite,
     [switch] $NoWait,
     [switch] $NoRun
 )
@@ -199,6 +210,29 @@ if (-not $Force -and $sessions.Count -gt 0) {
 # поэтому передаётся лишь при непустом пароле без символов ';' и '='.
 $startup = "startup;mode=embedded;port=$Port"
 if ($dbPassword -and $dbPassword -notmatch '[;=]') { $startup += ";auth=password;pwd=$dbPassword" }
+
+if ($AllowWrite) {
+    # danger_* - документированные startup-параметры вендора (README_FULL.md,
+    # "Параметры startup"), добавлены после версии 1.9.0. Обработка старше этой
+    # версии их молча игнорирует, поэтому версия проверяется отдельно.
+    $startup += ';danger_auto_write=true;danger_auto_priv=true'
+    $verFile = Join-Path (Split-Path -Parent $Epf) 'VERSION.txt'
+    $epfVer = if (Test-Path $verFile) { ([string](Get-Content $verFile -Raw -Encoding UTF8)).Trim() } else { '' }
+    if ($epfVer -match '^v?(\d+)\.(\d+)\.(\d+)') {
+        $major = [int] $Matches[1]; $minor = [int] $Matches[2]; $patch = [int] $Matches[3]
+        if (($major -lt 1) -or (($major -eq 1) -and ($minor -lt 9)) -or
+            (($major -eq 1) -and ($minor -eq 9) -and ($patch -lt 1))) {
+            Write-Host "[!] Обработка $epfVer старше 1.9.1: ключи danger_* она игнорирует, диалог подтверждения останется." -ForegroundColor Yellow
+            Write-Host '    Обновить: scripts\install-mcp.ps1 -Force (берёт epf из релиза GitHub).' -ForegroundColor Yellow
+        }
+        else {
+            Write-Host "[+] Авторазрешение опасных операций включено (epf $epfVer): danger_auto_write=true;danger_auto_priv=true" -ForegroundColor Green
+        }
+    }
+    else {
+        Write-Host '[!] Версия обработки неизвестна (нет VERSION.txt рядом с epf): ключи danger_* могут быть проигнорированы.' -ForegroundColor Yellow
+    }
+}
 
 $cmdLine = 'ENTERPRISE ' + $ibParam + ' ' + $authParams + ' /Execute "' + $Epf + '" /C"' + $startup +
     '" /DisableStartupDialogs /DisableStartupMessages'

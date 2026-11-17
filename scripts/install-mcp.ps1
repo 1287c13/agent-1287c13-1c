@@ -20,6 +20,9 @@ param(
     [string] $Root,
     # Версия релиза code-index-mcp ("latest" или, например, "v1.8.6").
     [string] $CodeIndexRelease = 'latest',
+    # Версия релиза 1c-mcp-toolkit ("latest" или, например, "v1.10.0").
+    # Ключи danger_* (авторазрешение записи) поддержаны начиная с 1.9.1.
+    [string] $ToolkitRelease = 'latest',
     # Лаунчер Python для venv сервера справки.
     [string] $PythonLauncher = 'py -3',
     [switch] $Force
@@ -68,22 +71,54 @@ else {
 }
 
 # ============================================================================
-# 2. 1c-mcp-toolkit (MCP_Toolkit.epf) — берём из вендорского репозитория
+# 2. 1c-mcp-toolkit (MCP_Toolkit.epf) — релиз GitHub, вендорская сборка как запас
 # ============================================================================
+# Обработка ставится из релиза (github.com/ROCTUP/1c-mcp-toolkit): в снимке
+# skills-vendor сборка может быть старше релиза, а от версии зависит поддержка
+# startup-ключей danger_auto_write / danger_auto_priv (нужна 1.9.1 и новее).
+# Если скачать не удалось, берётся вендорский снимок - с предупреждением.
 $tkDir = Join-Path $mcpDir '1c-mcp-toolkit'
 New-Item -ItemType Directory -Force $tkDir | Out-Null
+$tkEpf = Join-Path $tkDir 'MCP_Toolkit.epf'
 $tkSrc = Join-Path $vendor '1c-mcp-toolkit\build\MCP_Toolkit.epf'
 
-if ((Test-Path (Join-Path $tkDir 'MCP_Toolkit.epf')) -and -not $Force) {
+if ((Test-Path $tkEpf) -and -not $Force) {
     Write-Host '[=] 1c-toolkit: MCP_Toolkit.epf уже установлен'
 }
-elseif (Test-Path $tkSrc) {
-    Copy-Item $tkSrc $tkDir -Force
-    Copy-Item (Join-Path $vendor '1c-mcp-toolkit\build\MCP_Toolkit_x86.epf') $tkDir -Force -ErrorAction SilentlyContinue
-    Write-Host "[+] 1c-toolkit: MCP_Toolkit.epf скопирован из skills-vendor"
-}
 else {
-    throw "Нет $tkSrc. Сначала выполните scripts\install-vendor-repos.ps1"
+    $tkOk = $false
+    try {
+        $tkMetaUrl = if ($ToolkitRelease -eq 'latest') {
+            'https://api.github.com/repos/ROCTUP/1c-mcp-toolkit/releases/latest'
+        } else {
+            "https://api.github.com/repos/ROCTUP/1c-mcp-toolkit/releases/tags/$ToolkitRelease"
+        }
+        Write-Host "[*] 1c-toolkit: $tkMetaUrl"
+        $tkRel = Invoke-RestMethod $tkMetaUrl -Headers $userAgent -TimeoutSec 60
+        $tkAssets = @($tkRel.assets | Where-Object { $_.name -in @('MCP_Toolkit.epf', 'MCP_Toolkit_x86.epf') })
+        $tkMain = $tkAssets | Where-Object { $_.name -eq 'MCP_Toolkit.epf' } | Select-Object -First 1
+        if (-not $tkMain) { throw 'В релизе нет актива MCP_Toolkit.epf' }
+        foreach ($a in $tkAssets) {
+            Invoke-WebRequest $a.browser_download_url -OutFile (Join-Path $tkDir $a.name) -UseBasicParsing -Headers $userAgent -TimeoutSec 300
+        }
+        ($tkRel.tag_name) | Set-Content (Join-Path $tkDir 'VERSION.txt') -Encoding UTF8
+        Write-Host "[+] 1c-toolkit: $($tkRel.tag_name) -> $tkEpf"
+        $tkOk = $true
+    }
+    catch {
+        Write-Warning "1c-toolkit: релиз не скачан ($($_.Exception.Message))"
+    }
+    if (-not $tkOk) {
+        if (Test-Path $tkSrc) {
+            Copy-Item $tkSrc $tkDir -Force
+            Copy-Item (Join-Path $vendor '1c-mcp-toolkit\build\MCP_Toolkit_x86.epf') $tkDir -Force -ErrorAction SilentlyContinue
+            Set-Content (Join-Path $tkDir 'VERSION.txt') 'vendor-snapshot' -Encoding UTF8
+            Write-Host '[!] 1c-toolkit: взят вендорский снимок. Если он старше 1.9.1, ключи danger_* не работают.' -ForegroundColor Yellow
+        }
+        else {
+            throw "Нет ни релиза, ни $tkSrc. Сначала выполните scripts\install-vendor-repos.ps1"
+        }
+    }
 }
 
 # ============================================================================
